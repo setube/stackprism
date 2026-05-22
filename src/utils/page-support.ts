@@ -17,12 +17,22 @@ const getProtocol = (url: unknown): string => {
   }
 }
 
-export const isDetectablePageUrl = (url: unknown): boolean => DETECTABLE_PROTOCOLS.has(getProtocol(url))
+export const isAgentBridgePageUrl = (url: unknown): boolean => {
+  try {
+    const parsed = new URL(String(url || ''))
+    return parsed.protocol === 'http:' && parsed.hostname === '127.0.0.1' && parsed.pathname === '/bridge'
+  } catch {
+    return false
+  }
+}
+
+export const isDetectablePageUrl = (url: unknown): boolean => DETECTABLE_PROTOCOLS.has(getProtocol(url)) && !isAgentBridgePageUrl(url)
 
 export const isObservableRequestUrl = (url: unknown): boolean => OBSERVABLE_REQUEST_PROTOCOLS.has(getProtocol(url))
 
 export const checkPageSupport = (url: unknown): PageSupport => {
   const protocol = getProtocol(url)
+  if (isAgentBridgePageUrl(url)) return { supported: false, reason: 'Agent Bridge 页面不进入普通检测流程。' }
   if (!protocol) return { supported: false, reason: '当前标签页还没有加载网页。' }
   if (protocol === 'chrome:') return { supported: false, reason: 'Chrome 浏览器内置页面无法注入检测脚本。' }
   if (protocol === 'edge:') return { supported: false, reason: 'Edge 浏览器内置页面无法注入检测脚本。' }

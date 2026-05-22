@@ -39,7 +39,7 @@ export type ResponsePayloadMap = {
   AGENT_BRIDGE_HELLO: Ok<{ extensionVersion: string; protocolVersion: 1; capabilities: AgentBridgeCapabilities }> | Err
   START_AGENT_CAPTURE: Ok<null> | Err
   AGENT_CAPTURE_STATUS: Ok<null> | Err
-  AGENT_CAPTURE_CONTROL: Ok<{ command: 'continue' | 'cancel' }> | Err
+  AGENT_CAPTURE_CONTROL: Ok<null> | Err
   AGENT_PROFILE_TRANSFER_BEGIN: Ok<null> | Err
   AGENT_PROFILE_TRANSFER_CHUNK: Ok<null> | Err
   AGENT_PROFILE_TRANSFER_COMPLETE: Ok<null> | Err

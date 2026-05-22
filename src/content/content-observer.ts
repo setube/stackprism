@@ -1,5 +1,9 @@
 // @ts-nocheck
 ;(() => {
+  if (location.protocol === 'http:' && location.hostname === '127.0.0.1' && location.pathname === '/bridge') {
+    return
+  }
+
   const MAX_ITEMS = 300
   const MAX_DOM_MARKERS = 120
   const MAX_MUTATION_COUNT = 5000

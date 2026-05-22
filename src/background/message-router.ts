@@ -12,6 +12,7 @@ import {
 } from './popup-cache'
 import { runActivePageDetection, saveTabDataAndBadge } from './detection'
 import { loadDetectorSettings } from './detector-settings'
+import { handleAgentBridgeHello, validateAgentCaptureControlMessage, validateStartAgentCaptureMessage } from './agent-bridge-session'
 import { withTabWriteLock } from './tab-write-lock'
 import { checkPageSupport, isDetectablePageUrl } from '@/utils/page-support'
 
@@ -23,6 +24,33 @@ const clearUnsupportedTab = async (tabId: number) => {
 export const registerMessageRouter = () => {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || !message.type) return false
+
+    if (message.type === 'AGENT_BRIDGE_HELLO') {
+      handleAgentBridgeHello(message, sender)
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: { code: 'INVALID_REQUEST', message: String(error) } }))
+      return true
+    }
+
+    if (message.type === 'START_AGENT_CAPTURE') {
+      const validated = validateStartAgentCaptureMessage(message, sender)
+      if (!validated.ok) {
+        sendResponse({ ok: false, error: validated.error })
+        return false
+      }
+      sendResponse({ ok: true, data: null })
+      return false
+    }
+
+    if (message.type === 'AGENT_CAPTURE_CONTROL') {
+      const validated = validateAgentCaptureControlMessage(message, sender)
+      if (!validated.ok) {
+        sendResponse({ ok: false, error: validated.error })
+        return false
+      }
+      sendResponse({ ok: true, data: null })
+      return false
+    }
 
     if (message.type === 'GET_HEADER_DATA') {
       Promise.all([getTabData(message.tabId), loadDetectorSettings()])
