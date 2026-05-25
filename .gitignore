@@ -9,6 +9,7 @@ docs/public/icon.svg
 
 # Build and packaged extension output
 dist/
+dist-firefox/
 build/
 release/
 releases/
@@ -16,6 +17,7 @@ artifacts/
 public/injected/
 *.zip
 *.crx
+*.xpi
 *.pem
 
 # Test output and local reports
