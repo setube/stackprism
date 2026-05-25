@@ -66,6 +66,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "zip_name=stackprism-v${version}.zip" >> "$GITHUB_OUTPUT"
           echo "crx_name=stackprism-v${version}.crx" >> "$GITHUB_OUTPUT"
+          echo "xpi_name=stackprism-v${version}.xpi" >> "$GITHUB_OUTPUT"
 
       - name: 打包 zip
         shell: bash
@@ -77,6 +78,13 @@ jobs:
             zip -r "../release/${{ steps.meta.outputs.zip_name }}" .
           )
           sha256sum "release/${{ steps.meta.outputs.zip_name }}" > "release/${{ steps.meta.outputs.zip_name }}.sha256"
+
+      - name: 打包 Firefox .xpi
+        shell: bash
+        run: |
+          set -euo pipefail
+          node build-scripts/package-firefox.mjs
+          sha256sum "release/${{ steps.meta.outputs.xpi_name }}" > "release/${{ steps.meta.outputs.xpi_name }}.sha256"
 
       - name: 签名 crx
         id: crx
@@ -105,6 +113,8 @@ jobs:
           assets=(
             "release/${{ steps.meta.outputs.zip_name }}"
             "release/${{ steps.meta.outputs.zip_name }}.sha256"
+            "release/${{ steps.meta.outputs.xpi_name }}"
+            "release/${{ steps.meta.outputs.xpi_name }}.sha256"
           )
           if [ -f "release/${{ steps.meta.outputs.crx_name }}" ]; then
             assets+=(
