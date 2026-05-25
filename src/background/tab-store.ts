@@ -1,3 +1,5 @@
+import { compatStorage } from '@/utils/browser-compat'
+
 const TAB_DATA_PREFIX = 'tab:'
 const POPUP_DATA_PREFIX = 'popup:'
 
@@ -8,7 +10,7 @@ export const popupStorageKey = (tabId: number): string => `${POPUP_DATA_PREFIX}$
 export const getTabData = async (tabId: number): Promise<any> => {
   const key = storageKey(tabId)
   try {
-    const stored = await chrome.storage.session.get(key)
+    const stored = await compatStorage.session.get(key)
     return stored[key] || {}
   } catch {
     return {}
@@ -18,7 +20,7 @@ export const getTabData = async (tabId: number): Promise<any> => {
 export const getPopupCache = async (tabId: number): Promise<any> => {
   const key = popupStorageKey(tabId)
   try {
-    const stored = await chrome.storage.session.get(key)
+    const stored = await compatStorage.session.get(key)
     return stored[key] || null
   } catch {
     return null
@@ -26,14 +28,14 @@ export const getPopupCache = async (tabId: number): Promise<any> => {
 }
 
 export const writeTabData = async (tabId: number, tabData: Record<string, unknown>, popupRecord: any): Promise<void> => {
-  await chrome.storage.session.set({
+  await compatStorage.session.set({
     [storageKey(tabId)]: tabData,
     [popupStorageKey(tabId)]: popupRecord
   })
 }
 
 export const clearTabSession = async (tabId: number): Promise<void> => {
-  await chrome.storage.session.remove([storageKey(tabId), popupStorageKey(tabId)]).catch(() => {})
+  await compatStorage.session.remove([storageKey(tabId), popupStorageKey(tabId)]).catch(() => {})
 }
 
 export const getTabSnapshot = async (tabId: number): Promise<{ id: number; url: string; title: string }> => {

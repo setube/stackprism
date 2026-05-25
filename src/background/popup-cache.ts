@@ -1,3 +1,4 @@
+import { compatStorage } from '@/utils/browser-compat'
 import { attachTechnologyLinks } from './tech-links'
 import { addStoredCustomHeaderRules } from './headers'
 import { clearBadge, clearTabSession, getPopupCache, getTabData, getTabSnapshot, popupStorageKey, storageKey } from './tab-store'
@@ -500,7 +501,7 @@ export const getPopupResultResponse = async (tabId: number) => {
     if (legacyPopup) {
       nextStorage[storageKey(tabId)] = tabData
     }
-    chrome.storage.session.set(nextStorage).catch(() => {})
+    compatStorage.session.set(nextStorage).catch(() => {})
   }
 
   const updatedAt = getStoredUpdatedAt(data)
