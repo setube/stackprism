@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
-import { loadTsModule } from './helpers/load-ts-module.mjs'
+import { loadTsModule, resetLoadTsModuleCaches } from './helpers/load-ts-module.mjs'
 import identifiers from './fixtures/bridge-protocol-identifiers.json' with { type: 'json' }
 
 test('unit tests run with a 60 second timeout guard', async () => {
@@ -23,6 +23,62 @@ test('normalizes agent bridge opt-in as a local-only setting', async () => {
     normalizeSettingsWithLocalOptIn({ disabledTechnologies: ['React'] }, { agentBridgeEnabled: true }).disabledTechnologies[0],
     'React'
   )
+})
+
+test('detector settings cache keeps local agent bridge opt-in during sync updates', async () => {
+  const storage = {
+    sync: { stackPrismSettings: { disabledTechnologies: [] } },
+    local: { stackPrismSettings: { agentBridgeEnabled: true } }
+  }
+  globalThis.chrome = {
+    storage: {
+      sync: { get: async () => storage.sync },
+      local: { get: async () => storage.local }
+    }
+  }
+  const { applyDetectorSettingsUpdate, loadDetectorSettings } = await loadTsModule('src/background/detector-settings.ts')
+
+  assert.equal((await loadDetectorSettings()).agentBridgeEnabled, true)
+  const updated = applyDetectorSettingsUpdate({ disabledTechnologies: ['React'] }, { agentBridgeEnabled: true })
+
+  assert.equal(updated.agentBridgeEnabled, true)
+  assert.deepEqual(updated.disabledTechnologies, ['React'])
+  delete globalThis.chrome
+})
+
+test('detector settings preserves sync settings when local opt-in storage is unavailable', async () => {
+  resetLoadTsModuleCaches()
+  globalThis.chrome = {
+    storage: {
+      sync: { get: async () => ({ stackPrismSettings: { disabledTechnologies: ['React'] } }) },
+      local: {
+        get: async () => {
+          const error = new Error('local unavailable token=secret nonce=n_SECRETSECRETSECRETSECRET')
+          error.name = 'LocalSettingsError spb_ABCDEFGHIJKLMNOPQRSTUVWxy123456789012345'
+          throw error
+        }
+      }
+    }
+  }
+  const warnings = []
+  const originalWarn = console.warn
+  console.warn = (...args) => warnings.push(args)
+  const { loadDetectorSettings } = await loadTsModule('src/background/detector-settings.ts')
+
+  try {
+    const settings = await loadDetectorSettings()
+    assert.deepEqual(settings.disabledTechnologies, ['React'])
+    assert.equal(settings.agentBridgeEnabled, false)
+    assert.equal(warnings.length, 1)
+    assert.equal(warnings[0][1], 'stackPrismSettings')
+    assert.notEqual(warnings[0][2] instanceof Error, true)
+    assert.equal(JSON.stringify(warnings).includes('token=secret'), false)
+    assert.equal(JSON.stringify(warnings).includes('nonce='), false)
+    assert.equal(JSON.stringify(warnings).includes('spb_'), false)
+  } finally {
+    console.warn = originalWarn
+  }
+  delete globalThis.chrome
 })
 
 test('defines the site experience schema and required capabilities', async () => {
@@ -226,7 +282,12 @@ test('builds a redacted site experience profile from raw popup data and experien
       visual: { colors: ['#123456'], aboveFold: { heroText: 'Hi user@example.com' } },
       layout: { landmarks: ['header', 'main'], boundingBoxes: [{ text: 'secret@example.com', x: 1, y: 2 }] },
       components: { samples: [{ type: 'button', text: '支付 ￥199 给 张三 13800138000' }] },
-      interaction: { passive: true, animations: ['fade'], closedShadowRoots: 1 },
+      interaction: {
+        passive: true,
+        animations: ['fade'],
+        focusHoverHints: ['.cta:hover{background:url("https://cdn.example.com/hover.png?preview=abc&token=secret#frag")}'],
+        closedShadowRoots: 1
+      },
       ux: { textSamples: ['联系 user@example.com 或 13800138000，订单 1234567890123，金额 ￥199，联系人 张三'] },
       assets: { urls: ['https://cdn.example.com/private.woff2?token=abc#font'] },
       evidence: {
@@ -254,9 +315,14 @@ test('builds a redacted site experience profile from raw popup data and experien
   assert.ok(profile.limitations.includes('cross_origin_iframes_limited'))
   assert.ok(profile.limitations.includes('closed_shadow_roots_limited'))
   assert.ok(profile.limitations.includes('stylesheet_access_limited'))
+  assert.ok(profile.limitations.includes('resource_urls_truncated'))
+  assert.ok(profile.limitations.includes('text_samples_truncated'))
+  assert.ok(profile.limitations.includes('component_samples_truncated'))
+  assert.ok(profile.limitations.includes('css_rules_truncated'))
   assert.match(profile.agentGuidance.summary, /Vue/)
+  assert.doesNotMatch(profile.agentGuidance.summary, /secret|user@example\.com|13800138000|\u0000/)
   assert.deepEqual(profile.visualProfile.colorTokens, ['#123456'])
-  assert.doesNotMatch(serialized, /secret|Bearer|user@example\.com|13800138000|1234567890123|￥199|张三/)
+  assert.doesNotMatch(serialized, /secret|Bearer|user@example\.com|13800138000|1234567890123|￥199|张三|preview=abc|#frag/)
   for (const url of [
     profile.target.url,
     profile.target.finalUrl,
@@ -269,7 +335,28 @@ test('builds a redacted site experience profile from raw popup data and experien
   ]) {
     assert.equal(new URL(url).hash, '')
   }
-  assert.match(serialized, /token=\[redacted\]|signature=\[redacted\]|auth=\[redacted\]|session=\[redacted\]|key=\[redacted\]/)
+  assert.match(
+    serialized,
+    /token=\[redacted\]|signature=\[redacted\]|auth=\[redacted\]|session=\[redacted\]|key=\[redacted\]|preview=\[redacted\]/
+  )
+})
+
+test('agent guidance sanitizes external profile labels before composing summary', async () => {
+  const { buildAgentGuidance } = await loadTsModule('src/utils/site-experience-guidance.ts')
+  const guidance = buildAgentGuidance({ primaryFrontend: 'Vue token=secret user@example.com\u0000'.repeat(8) }, [
+    'session=abc',
+    '联系人 张三',
+    'ok\u0000line',
+    'ignored'
+  ])
+
+  assert.equal(guidance.summary.includes('secret'), false)
+  assert.equal(guidance.summary.includes('user@example.com'), false)
+  assert.equal(guidance.summary.includes('张三'), false)
+  assert.equal(guidance.summary.includes('\u0000'), false)
+  assert.match(guidance.summary, /token=\[redacted\]/)
+  assert.match(guidance.summary, /session=\[redacted\]/)
+  assert.match(guidance.summary, /联系人 \[redacted\]/)
 })
 
 test('returns empty sections and section limitations when include excludes experience data', async () => {
@@ -312,8 +399,239 @@ test('returns empty sections and section limitations when include excludes exper
   assert.deepEqual(profile.componentProfile, {})
   assert.deepEqual(profile.interactionProfile, {})
   assert.deepEqual(profile.uxProfile, {})
-  assert.deepEqual(profile.assetProfile.resourceUrls, [])
+  assert.deepEqual(profile.assetProfile, {})
   for (const section of ['visual', 'layout', 'components', 'interaction', 'ux', 'assets']) {
     assert.ok(profile.limitations.includes(`${section}_section_not_requested`))
   }
+})
+
+test('does not emit unrequested experience sections from collected profiler data', async () => {
+  const { buildSiteExperienceProfile } = await loadTsModule('src/utils/site-experience-profile.ts')
+  const profile = buildSiteExperienceProfile({
+    captureId: 'cap_CCCCCCCCCCCCCCCCCCCCCC',
+    request: {
+      url: 'https://example.com/',
+      mode: 'experience',
+      waitMs: 0,
+      include: ['assets'],
+      viewports: [],
+      options: {
+        forceRefresh: false,
+        captureScreenshotMetadata: true,
+        keepTabOpen: false,
+        allowPrivateNetworkTarget: false,
+        targetMode: 'new_tab',
+        maxResourceUrls: 300
+      },
+      protocolVersion: 1
+    },
+    raw: null,
+    experience: {
+      visual: { colors: ['#123456'] },
+      layout: { landmarks: ['main'] },
+      components: { samples: [{ type: 'button', rect: { x: 1, y: 2, width: 3, height: 4 } }] },
+      interaction: { animations: ['fade'] },
+      ux: { textSamples: ['Sensitive person 13800138000'] },
+      assets: { urls: ['https://cdn.example.com/app.js?token=secret#hash'] },
+      evidence: { truncation: { resourceUrls: 0, textSamples: 0, componentSamples: 0, cssRules: 0 } }
+    },
+    capabilities: {
+      agentBridge: true,
+      siteExperienceProfileV1: true,
+      profileChunkTransport: true,
+      bridgeContentPost: true,
+      storageSession: true,
+      experienceProfiler: true,
+      rawProfile: false,
+      viewportMetadata: false
+    },
+    finalUrl: 'https://example.com/'
+  })
+
+  assert.deepEqual(profile.visualProfile, {})
+  assert.deepEqual(profile.layoutProfile, {})
+  assert.deepEqual(profile.componentProfile, {})
+  assert.deepEqual(profile.interactionProfile, {})
+  assert.deepEqual(profile.uxProfile, {})
+  assert.equal(profile.assetProfile.resourceUrls.length, 1)
+  assert.ok(profile.limitations.includes('visual_section_not_requested'))
+  assert.ok(profile.limitations.includes('components_section_not_requested'))
+  assert.ok(profile.limitations.includes('tech_section_not_requested'))
+  assert.deepEqual(profile.techProfile, {})
+})
+
+test('retains screenshot metadata fields only when explicitly requested', async () => {
+  const { buildSiteExperienceProfile } = await loadTsModule('src/utils/site-experience-profile.ts')
+  const profile = buildSiteExperienceProfile({
+    captureId: 'cap_CCCCCCCCCCCCCCCCCCCCCC',
+    request: {
+      url: 'https://example.com/',
+      mode: 'experience',
+      waitMs: 0,
+      include: ['visual', 'layout', 'components'],
+      viewports: [],
+      options: {
+        forceRefresh: false,
+        captureScreenshotMetadata: true,
+        keepTabOpen: false,
+        allowPrivateNetworkTarget: false,
+        targetMode: 'new_tab',
+        maxResourceUrls: 300
+      },
+      protocolVersion: 1
+    },
+    raw: null,
+    experience: {
+      visual: { colors: ['#123456'], aboveFold: { heroText: 'Lead' } },
+      layout: { landmarks: ['main'], boundingBoxes: [{ selector: 'main', rect: { x: 1, y: 2, width: 3, height: 4 } }] },
+      components: { samples: [{ type: 'button', text: 'Buy', rect: { x: 5, y: 6, width: 7, height: 8 } }] },
+      evidence: { truncation: {} }
+    },
+    capabilities: {
+      agentBridge: true,
+      siteExperienceProfileV1: true,
+      profileChunkTransport: true,
+      bridgeContentPost: true,
+      storageSession: true,
+      experienceProfiler: true,
+      rawProfile: false,
+      viewportMetadata: true
+    },
+    finalUrl: 'https://example.com/'
+  })
+
+  assert.deepEqual(profile.visualProfile.aboveFold, { heroText: 'Lead' })
+  assert.equal(profile.layoutProfile.boundingBoxes[0].selector, 'main')
+  assert.deepEqual(profile.componentProfile.samples[0].rect, { x: 5, y: 6, width: 7, height: 8 })
+  assert.equal(profile.limitations.includes('screenshot_metadata_not_requested'), false)
+  assert.equal(JSON.stringify(profile).includes('imageData'), false)
+})
+
+test('uses profiler truncation evidence and strips component rect metadata when screenshots are disabled', async () => {
+  const { buildSiteExperienceProfile } = await loadTsModule('src/utils/site-experience-profile.ts')
+  const profile = buildSiteExperienceProfile({
+    captureId: 'cap_CCCCCCCCCCCCCCCCCCCCCC',
+    request: {
+      url: 'https://example.com/',
+      mode: 'experience',
+      waitMs: 0,
+      include: ['components', 'ux', 'assets'],
+      viewports: [],
+      options: {
+        forceRefresh: false,
+        captureScreenshotMetadata: false,
+        keepTabOpen: false,
+        allowPrivateNetworkTarget: false,
+        targetMode: 'new_tab',
+        maxResourceUrls: 300
+      },
+      protocolVersion: 1
+    },
+    raw: null,
+    experience: {
+      components: { samples: [{ type: 'button', text: 'Buy', rect: { x: 1, y: 2, width: 3, height: 4 } }] },
+      ux: { textSamples: ['Buy now'] },
+      assets: { urls: [] },
+      evidence: { truncation: { resourceUrls: 7, textSamples: 6, componentSamples: 5, cssRules: 4, executeScriptResult: 3 } },
+      limitations: ['passive_interaction_only']
+    },
+    capabilities: {
+      agentBridge: true,
+      siteExperienceProfileV1: true,
+      profileChunkTransport: true,
+      bridgeContentPost: true,
+      storageSession: true,
+      experienceProfiler: true,
+      rawProfile: false,
+      viewportMetadata: false
+    },
+    finalUrl: 'https://example.com/'
+  })
+
+  assert.deepEqual(profile.evidence.truncation, {
+    resourceUrls: 7,
+    textSamples: 6,
+    componentSamples: 5,
+    cssRules: 4,
+    executeScriptResult: 3
+  })
+  assert.equal(profile.evidence.rawCounts.cssRules, 4)
+  assert.equal(JSON.stringify(profile.componentProfile).includes('"rect"'), false)
+  assert.ok(profile.limitations.includes('resource_urls_truncated'))
+  assert.ok(profile.limitations.includes('text_samples_truncated'))
+  assert.ok(profile.limitations.includes('component_samples_truncated'))
+  assert.ok(profile.limitations.includes('css_rules_truncated'))
+  assert.ok(profile.limitations.includes('execute_script_result_truncated'))
+  assert.ok(profile.limitations.includes('passive_interaction_only'))
+})
+
+test('redacts sensitive profile object keys and externally supplied limitations', async () => {
+  const { buildSiteExperienceProfile } = await loadTsModule('src/utils/site-experience-profile.ts')
+  const capabilities = {
+    agentBridge: true,
+    siteExperienceProfileV1: true,
+    profileChunkTransport: true,
+    bridgeContentPost: true,
+    storageSession: true,
+    experienceProfiler: true,
+    rawProfile: false,
+    viewportMetadata: false
+  }
+
+  const profile = buildSiteExperienceProfile({
+    captureId: 'cap_CCCCCCCCCCCCCCCCCCCCCC',
+    request: {
+      url: 'https://example.com/',
+      mode: 'experience',
+      waitMs: 0,
+      include: ['layout', 'interaction'],
+      viewports: [],
+      options: {
+        forceRefresh: false,
+        captureScreenshotMetadata: true,
+        keepTabOpen: false,
+        allowPrivateNetworkTarget: false,
+        targetMode: 'new_tab',
+        maxResourceUrls: 300
+      },
+      protocolVersion: 1
+    },
+    raw: null,
+    experience: {
+      layout: {
+        'token=secret': 'visible',
+        safe: { 'authorization=Bearer secret': 'https://cdn.example.com/app.js?signature=abc#frag' },
+        'apiToken=spb_secret': 'sessionId=s_secret'
+      },
+      interaction: {
+        'session=abc': 'hover token=secret',
+        'secretKey=abc': 'bridgeToken=spbt_secret'
+      },
+      evidence: { truncation: {} },
+      limitations: ['token=secret', 'apiToken=spb_secret', 'bridgeToken=spbt_secret', '联系人 张三', 'safe']
+    },
+    capabilities,
+    finalUrl: 'https://example.com/'
+  })
+
+  const serialized = JSON.stringify(profile)
+  assert.equal(serialized.includes('token=secret'), false)
+  assert.equal(serialized.includes('authorization=Bearer secret'), false)
+  assert.equal(serialized.includes('apiToken=spb_secret'), false)
+  assert.equal(serialized.includes('sessionId=s_secret'), false)
+  assert.equal(serialized.includes('secretKey=abc'), false)
+  assert.equal(serialized.includes('bridgeToken=spbt_secret'), false)
+  assert.equal(serialized.includes('signature=abc'), false)
+  assert.equal(serialized.includes('#frag'), false)
+  assert.equal(serialized.includes('张三'), false)
+  assert.equal(serialized.includes('token=[redacted]'), true)
+  assert.equal(serialized.includes('apiToken=[redacted]'), true)
+  assert.equal(serialized.includes('sessionId=[redacted]'), true)
+  assert.equal(serialized.includes('secretKey=[redacted]'), true)
+  assert.equal(serialized.includes('bridgeToken=[redacted]'), true)
+  assert.equal(serialized.includes('authorization=[redacted]'), true)
+  assert.ok(profile.limitations.includes('token=[redacted]'))
+  assert.ok(profile.limitations.includes('apiToken=[redacted]'))
+  assert.ok(profile.limitations.includes('bridgeToken=[redacted]'))
+  assert.ok(profile.limitations.includes('联系人 [redacted]'))
 })

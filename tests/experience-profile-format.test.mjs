@@ -23,6 +23,13 @@ test('experience profiler default export is structured-clone safe', async () => 
   assert.ok(JSON.stringify(clone).length < 2 * 1024 * 1024)
 })
 
+test('experience profiler preserves matched selector metadata for bounding boxes', async () => {
+  const source = await readFile(new URL('../src/injected/experience-profiler.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /map\(element => \(\{ selector, element \}\)\)/)
+  assert.doesNotMatch(source, /selector:\s*element\.tagName/)
+})
+
 test('site experience fixture covers visual, layout, component and sensitive text cases', async () => {
   const fixture = await readFile(new URL('./fixtures/site-experience-fixture.html', import.meta.url), 'utf8')
 
