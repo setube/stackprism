@@ -53,24 +53,57 @@
       </div>
     </section>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Agent Bridge</h2>
+    <section
+      class="panel agent-bridge-panel"
+      :class="{ 'is-enabled': savedAgentBridgeEnabled, 'has-pending-change': hasPendingAgentBridgeChange }"
+    >
+      <div class="agent-bridge-main">
+        <div class="agent-bridge-title">
+          <span class="agent-bridge-mark">
+            <Bot :size="22" :stroke-width="2" />
+          </span>
+          <div>
+            <div class="agent-bridge-kicker">本机通道</div>
+            <h2 class="agent-bridge-heading">Agent Bridge</h2>
+            <p>只读采集目标页面的技术栈、视觉结构与体验摘要，供本机 Agent 使用。</p>
+          </div>
+        </div>
+        <span class="agent-bridge-state" :class="{ active: savedAgentBridgeEnabled, pending: hasPendingAgentBridgeChange }">
+          {{ agentBridgeStateLabel }}
+        </span>
       </div>
-      <label class="toggle-item agent-bridge-toggle">
-        <Checkbox v-model="state.settings.agentBridgeEnabled" />
-        启用本机 Agent Bridge
-      </label>
-      <p class="hint">允许本机 Agent 通过 127.0.0.1 bridge 读取浏览器可观测的技术与体验摘要。该设置只保存在当前浏览器 profile。</p>
+      <div class="agent-bridge-control">
+        <label class="agent-bridge-toggle">
+          <Checkbox v-model="state.settings.agentBridgeEnabled" />
+          <span>
+            <strong>允许本机访问</strong>
+            <small>{{ agentBridgeToggleHint }}</small>
+          </span>
+        </label>
+        <div class="agent-bridge-facts" aria-label="Agent Bridge 边界">
+          <span>
+            <ShieldCheck :size="13" :stroke-width="2" />
+            手动开启
+          </span>
+          <span>
+            <Server :size="13" :stroke-width="2" />
+            127.0.0.1
+          </span>
+          <span>
+            <Monitor :size="13" :stroke-width="2" />
+            当前 profile
+          </span>
+        </div>
+      </div>
     </section>
 
     <section class="panel two-column">
-      <div>
+      <div class="settings-fieldset">
         <h2>禁用指定技术</h2>
         <p class="hint">每行一个技术名称。名称匹配后不会在结果里显示。</p>
         <Textarea v-model="disabledTechnologiesText" :rows="9" placeholder="例如：&#10;Google Analytics&#10;WordPress 插件: akismet" />
       </div>
-      <div>
+      <div class="settings-fieldset">
         <h2>自定义样式 CSS</h2>
         <p class="hint">保存后会应用到弹窗和设置页。留空则不覆盖样式。</p>
         <Textarea v-model="customCssText" :rows="9" placeholder=".tech-name { color: #0f766e; }" />
@@ -177,7 +210,21 @@
 
 <script setup lang="ts">
   import { onMounted, reactive, ref, watch, computed } from 'vue'
-  import { BookOpen, ExternalLink, Inbox, Monitor, Moon, Pencil, RotateCcw, Save, Sun, Trash2 } from 'lucide-vue-next'
+  import {
+    BookOpen,
+    Bot,
+    ExternalLink,
+    Inbox,
+    Monitor,
+    Moon,
+    Pencil,
+    RotateCcw,
+    Save,
+    Server,
+    ShieldCheck,
+    Sun,
+    Trash2
+  } from 'lucide-vue-next'
   import Select from '@/ui/components/Select.vue'
   import Checkbox from '@/ui/components/Checkbox.vue'
   import Input from '@/ui/components/Input.vue'
@@ -220,6 +267,7 @@
   const status = reactive({ message: '', type: '' as 'ok' | 'error' | '' })
   const version = ref('')
   const theme = ref<ThemeMode>('auto')
+  const savedAgentBridgeEnabled = ref(false)
   let statusTimer = 0
 
   const toggleTheme = async () => {
@@ -251,6 +299,16 @@
     state.settings.customRules.map(
       rule => `${rule.category} · ${rule.kind} · ${rule.confidence} · ${rule.matchType} · ${rule.patterns.length} 条匹配规则`
     )
+  )
+  const hasPendingAgentBridgeChange = computed(() => state.settings.agentBridgeEnabled !== savedAgentBridgeEnabled.value)
+  const agentBridgeStateLabel = computed(() => {
+    if (hasPendingAgentBridgeChange.value) return state.settings.agentBridgeEnabled ? '待保存启用' : '待保存关闭'
+    return savedAgentBridgeEnabled.value ? '启用中' : '已关闭'
+  })
+  const agentBridgeToggleHint = computed(() =>
+    hasPendingAgentBridgeChange.value
+      ? '点击保存设置后生效；未保存前仍按当前 profile 的已保存状态处理。'
+      : '仅保存在当前浏览器 profile，关闭后拒绝捕获请求。'
   )
 
   const lines = (value: string) => {
@@ -504,6 +562,12 @@
     rulesJsonText.value = JSON.stringify(state.settings.customRules, null, 2)
   }
 
+  const applyLoadedSettings = (settings: ReturnType<typeof defaultSettings>) => {
+    state.settings = settings
+    savedAgentBridgeEnabled.value = settings.agentBridgeEnabled
+    syncFromSettings()
+  }
+
   const collectCategorySettings = () => {
     const disabled: string[] = []
     for (const cat of CATEGORY_ORDER) {
@@ -673,8 +737,7 @@
         chrome.storage.sync.set({ [SETTINGS_STORAGE_KEY]: syncSettings }),
         chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: { [AGENT_BRIDGE_ENABLED_STORAGE_KEY]: settings.agentBridgeEnabled } })
       ])
-      state.settings = settings
-      syncFromSettings()
+      applyLoadedSettings(settings)
       applyCustomCss(settings.customCss)
       showStatus('设置已保存。重新打开或刷新插件弹窗后生效。', 'ok')
     } catch (error: any) {
@@ -684,7 +747,8 @@
 
   const resetSettings = async () => {
     if (!confirm('确定恢复默认设置？自定义规则和自定义 CSS 会被清空。')) return
-    state.settings = defaultSettings()
+    const defaults = defaultSettings()
+    state.settings = defaults
     const syncDefaults = normalizeSettings({
       disabledCategories: state.settings.disabledCategories,
       disabledTechnologies: state.settings.disabledTechnologies,
@@ -697,7 +761,7 @@
         chrome.storage.local.remove(SETTINGS_STORAGE_KEY)
       ])
       clearRuleForm()
-      syncFromSettings()
+      applyLoadedSettings(defaults)
       applyCustomCss('')
       showStatus('已恢复默认设置。', 'ok')
     } catch (error: any) {
@@ -726,8 +790,7 @@
   onMounted(async () => {
     version.value = chrome.runtime.getManifest?.()?.version || ''
     theme.value = await getStoredTheme()
-    state.settings = await loadSettings()
-    syncFromSettings()
+    applyLoadedSettings(await loadSettings())
     applyCustomCss(state.settings.customCss)
   })
 </script>
@@ -789,17 +852,18 @@
     font-size: 22px;
     font-weight: 600;
     gap: 10px;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
     line-height: 1.2;
     margin-bottom: 6px;
   }
 
   h2 {
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 650;
+    letter-spacing: 0;
+    line-height: 1.35;
+    text-transform: none;
   }
 
   .version-badge {
@@ -811,8 +875,9 @@
 
   .hint {
     color: var(--muted);
-    font-size: 13px;
-    margin-bottom: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 12px;
   }
 
   // header-actions：透明 ghost + 一个 primary
@@ -894,6 +959,7 @@
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(20, 35, 50, 0.03);
     margin-bottom: 16px;
     padding: 20px 24px 24px;
   }
@@ -921,7 +987,7 @@
       border-radius: 5px;
       color: var(--muted);
       cursor: pointer;
-      font-size: 12px;
+      font-size: 13px;
       padding: 4px 10px;
       transition:
         border-color 0.15s ease,
@@ -937,19 +1003,203 @@
   // category toggle 列表：去边框，紧凑 inline 风格
   .category-grid {
     display: grid;
-    gap: 4px 16px;
+    gap: 8px;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   }
 
   .toggle-item {
     align-items: center;
+    background: var(--dt-bg);
+    border: 1px solid transparent;
+    border-radius: 6px;
     color: var(--text);
     cursor: pointer;
     display: flex;
-    font-size: 13px;
+    font-size: 14px;
     gap: 8px;
-    padding: 4px 0;
+    min-height: 36px;
+    padding: 7px 10px;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease;
     user-select: none;
+
+    &:hover {
+      background: var(--accent-soft);
+      border-color: rgba(15, 118, 110, 0.2);
+    }
+  }
+
+  .agent-bridge-panel {
+    background: linear-gradient(90deg, var(--accent-soft), transparent 52%), var(--panel);
+    border-color: rgba(15, 118, 110, 0.32);
+    box-shadow: 0 12px 28px rgba(15, 118, 110, 0.08);
+    overflow: hidden;
+    padding: 0;
+
+    &.is-enabled {
+      border-color: rgba(4, 120, 87, 0.52);
+      box-shadow: 0 16px 34px rgba(4, 120, 87, 0.12);
+    }
+
+    &.has-pending-change {
+      border-color: rgba(180, 83, 9, 0.42);
+      box-shadow: 0 14px 30px rgba(180, 83, 9, 0.1);
+    }
+  }
+
+  .agent-bridge-main {
+    align-items: flex-start;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    padding: 22px 24px 16px;
+  }
+
+  .agent-bridge-title {
+    align-items: flex-start;
+    display: flex;
+    gap: 14px;
+
+    p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+      margin-top: 4px;
+      max-width: 620px;
+    }
+  }
+
+  .agent-bridge-mark {
+    align-items: center;
+    background: var(--accent);
+    border-radius: 8px;
+    box-shadow: 0 10px 20px rgba(15, 118, 110, 0.22);
+    color: #ffffff;
+    display: inline-flex;
+    flex-shrink: 0;
+    height: 44px;
+    justify-content: center;
+    width: 44px;
+  }
+
+  .agent-bridge-kicker {
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    margin-bottom: 7px;
+    text-transform: uppercase;
+  }
+
+  .agent-bridge-heading {
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 650;
+    letter-spacing: 0;
+    line-height: 1.2;
+    text-transform: none;
+  }
+
+  .agent-bridge-state {
+    align-items: center;
+    background: var(--confidence-low-bg);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+    display: inline-flex;
+    flex-shrink: 0;
+    font-size: 13px;
+    font-weight: 600;
+    min-height: 30px;
+    padding: 4px 12px;
+
+    &.active {
+      background: var(--confidence-high-bg);
+      border-color: rgba(4, 120, 87, 0.24);
+      color: var(--confidence-high-text);
+    }
+
+    &.pending {
+      background: rgba(245, 158, 11, 0.12);
+      border-color: rgba(180, 83, 9, 0.26);
+      color: #92400e;
+    }
+  }
+
+  .agent-bridge-control {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.58);
+    border-top: 1px solid rgba(15, 118, 110, 0.16);
+    display: flex;
+    gap: 18px;
+    justify-content: space-between;
+    padding: 16px 24px 18px;
+  }
+
+  :global(:root[data-theme='dark']) .agent-bridge-control {
+    background: rgba(15, 20, 25, 0.28);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .agent-bridge-control {
+      background: rgba(15, 20, 25, 0.28);
+    }
+  }
+
+  .agent-bridge-toggle {
+    align-items: center;
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    gap: 11px;
+    min-width: 0;
+    user-select: none;
+
+    strong,
+    small {
+      display: block;
+    }
+
+    strong {
+      font-size: 15px;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+
+    small {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      margin-top: 2px;
+    }
+  }
+
+  .agent-bridge-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+
+    span {
+      align-items: center;
+      background: var(--panel);
+      border: 1px solid rgba(15, 118, 110, 0.18);
+      border-radius: 999px;
+      color: var(--muted);
+      display: inline-flex;
+      font-size: 13px;
+      gap: 5px;
+      min-height: 30px;
+      padding: 5px 10px;
+      white-space: nowrap;
+    }
+
+    svg {
+      color: var(--accent);
+    }
   }
 
   // two-column / rule-textareas
@@ -958,6 +1208,34 @@
     display: grid;
     gap: 16px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-fieldset {
+    background: var(--dt-bg);
+    border: 1px solid var(--tech-divider);
+    border-radius: 8px;
+    padding: 20px;
+
+    :deep(.sp-textarea) {
+      background: var(--panel);
+      font-size: 14px;
+    }
+
+    :deep(.sp-textarea-inner) {
+      font-size: 14px;
+      line-height: 1.6;
+      padding: 12px;
+    }
+  }
+
+  .panel > :deep(.sp-textarea) {
+    font-size: 14px;
+  }
+
+  .panel > :deep(.sp-textarea) :deep(.sp-textarea-inner) {
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 12px;
   }
 
   .rule-textareas {
@@ -969,9 +1247,9 @@
   label span {
     color: var(--text);
     display: block;
-    font-size: 12px;
-    font-weight: 500;
-    letter-spacing: 0.01em;
+    font-size: 14px;
+    font-weight: 550;
+    letter-spacing: 0;
     margin-bottom: 6px;
   }
 
@@ -980,6 +1258,13 @@
     display: grid;
     gap: 12px 16px;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+
+    :deep(.sp-input),
+    :deep(.sp-input-inner),
+    :deep(.sp-select-trigger),
+    :deep(.sp-select-input) {
+      font-size: 14px;
+    }
   }
 
   // match-targets：inline checkbox 列
@@ -994,7 +1279,7 @@
       color: var(--muted);
       cursor: pointer;
       display: inline-flex;
-      font-size: 13px;
+      font-size: 14px;
       gap: 6px;
     }
   }
@@ -1011,7 +1296,7 @@
       border-radius: 6px;
       color: var(--text);
       cursor: pointer;
-      font-size: 13px;
+      font-size: 14px;
       padding: 6px 14px;
       transition:
         border-color 0.15s ease,
@@ -1062,7 +1347,7 @@
     color: var(--muted);
     display: flex;
     flex-direction: column;
-    font-size: 13px;
+    font-size: 14px;
     gap: 8px;
     padding: 32px 0 24px;
   }
@@ -1074,13 +1359,13 @@
 
   .rule-title {
     color: var(--text);
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
   }
 
   .rule-meta {
     color: var(--muted);
-    font-size: 12px;
+    font-size: 13px;
     margin-top: 2px;
     overflow-wrap: anywhere;
   }
@@ -1132,6 +1417,20 @@
     .settings-header-inner {
       flex-direction: column;
       padding: 12px 16px;
+    }
+
+    .agent-bridge-main,
+    .agent-bridge-control {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .agent-bridge-state {
+      align-self: flex-start;
+    }
+
+    .agent-bridge-facts {
+      justify-content: flex-start;
     }
 
     .msg {
