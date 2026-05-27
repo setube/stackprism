@@ -124,9 +124,7 @@ export const runActivePageDetection = async (tabId: number, options: { force?: b
       world: 'MAIN',
       files: ['injected/page-detector.iife.js']
     })
-    const rawResult = injection?.[0]?.result
-    // Firefox may return the raw Promise instead of awaiting it
-    const page = rawResult && typeof rawResult.then === 'function' ? await rawResult : rawResult
+    const page = await injection?.[0]?.result
     if (!page) return
 
     const augmentedPage = await augmentPageWithWordPressThemeStyles(page)
