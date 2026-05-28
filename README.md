@@ -4,9 +4,10 @@
 
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/cagpdifljieeiajlhlcboelglkalofak?label=Chrome%20Web%20Store&color=FBBC04)](https://chromewebstore.google.com/detail/stackprism/cagpdifljieeiajlhlcboelglkalofak)
 [![Edge Add-ons](https://img.shields.io/badge/dynamic/json?label=Edge%20Add-ons&query=%24.version&url=https%3A%2F%2Fmicrosoftedge.microsoft.com%2Faddons%2Fgetproductdetailsbycrxid%2Fojgmhlogaoiegdonnlnibeoikbleccno&prefix=v&color=00A4EF)](https://microsoftedge.microsoft.com/addons/detail/stackprism/ojgmhlogaoiegdonnlnibeoikbleccno)
+[![Firefox Add-ons](https://img.shields.io/amo/v/stackprism?label=Firefox%20Add-ons&color=FF7139)](https://addons.mozilla.org/firefox/addon/stackprism/)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-blue)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-4CAF50)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
-[![Platform](https://img.shields.io/badge/Platform-Chrome%20%7C%20Edge-26A69A)](#上手使用)
+[![Platform](https://img.shields.io/badge/Platform-Chrome%20%7C%20Edge%20%7C%20Firefox-26A69A)](#安装)
 [![PRs welcome!](https://img.shields.io/badge/PRs-Welcome-FF6F61)](https://github.com/setube/stackprism/issues)
 
 # StackPrism / 栈棱镜 —— 网页技术栈识别浏览器扩展
@@ -19,7 +20,7 @@
 
 ## 简介
 
-StackPrism(以下简称 **栈棱镜**)是一款基于 **Chrome / Edge Manifest V3** 的网页技术栈识别扩展。
+StackPrism(以下简称 **栈棱镜**)是一款基于 **Manifest V3** 的网页技术栈识别扩展,支持 **Chrome / Edge / Firefox**。
 
 不同于市面上多数只看 HTML 资源 URL 的同类工具,栈棱镜把检测拆成 4 个独立通道并行收集线索:
 
@@ -54,13 +55,22 @@ StackPrism(以下简称 **栈棱镜**)是一款基于 **Chrome / Edge Manifest V
 git clone https://github.com/setube/stackprism.git
 cd stackprism
 pnpm install
-pnpm run build
+pnpm run build            # Chrome / Edge
+pnpm run build:firefox    # Firefox
 ```
+
+**Chrome / Edge:**
 
 1. 打开 `chrome://extensions` 或 `edge://extensions`
 2. 右上角开启「开发者模式」
-3. 点「加载已解压的扩展程序」,选刚才构建出的 `dist/` 目录
+3. 点「加载已解压的扩展程序」,选 `dist/` 目录
 4. 访问任意网页,扩展图标显示识别数量
+
+**Firefox:**
+
+1. 打开 `about:debugging#/runtime/this-firefox`
+2. 点「临时载入附加组件」,选 `dist-firefox/manifest.json`
+3. 或者运行 `pnpm run build:firefox` 后在 `release/` 目录获取 `.xpi` 文件双击安装
 
 ### 开发
 
@@ -69,6 +79,7 @@ pnpm run dev          # 开发模式 + HMR
 pnpm run typecheck    # vue-tsc 类型检查
 pnpm run lint         # ESLint
 pnpm run build        # 生产构建(含规则预编译)
+pnpm run build:firefox # Firefox 构建 + .xpi 打包
 pnpm run docs:dev     # VitePress 文档站本地预览
 ```
 
