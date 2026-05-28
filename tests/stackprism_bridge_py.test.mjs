@@ -115,7 +115,7 @@ const acceptFinalUrl = async (ready, captureId, bridgeToken, finalUrl = request.
   assert.equal(envelope.body.phase, 'target_loaded')
 }
 
-const profileFor = captureId => ({
+const profileFor = (captureId, overrides = {}) => ({
   schema: 'stackprism.site_experience_profile.v1',
   captureId,
   generatedAt: new Date(0).toISOString(),
@@ -130,7 +130,8 @@ const profileFor = captureId => ({
   assetProfile: {},
   evidence: {},
   limitations: [],
-  agentGuidance: {}
+  agentGuidance: {},
+  ...overrides
 })
 
 const startPythonBridge = async () => {
@@ -603,12 +604,31 @@ test('python fallback bridge page has CSP nonce and script-safe config', async (
     assert.match(csp, /default-src 'none'/)
     assert.match(csp, /frame-ancestors 'none'/)
     assert.match(csp, /connect-src 'self'/)
+    assert.match(csp, /img-src data:/)
     assert.match(csp, /base-uri 'none'/)
     assert.match(csp, /form-action 'none'/)
     assert.ok(cspNonce)
     assert.match(csp, new RegExp(`style-src 'nonce-${cspNonce}'`))
     assert.equal(response.headers.get('x-frame-options'), 'DENY')
+    assert.match(html, /meta name="stackprism-agent-bridge" content="1"/)
+    assert.match(html, /class="bridge-card"/)
+    assert.match(html, /id="progressBar"/)
+    assert.match(html, /id="targetUrl"/)
+    assert.match(html, /id="targetScreenshot"/)
+    assert.match(html, /id="screenshotDownload"/)
+    assert.match(html, /id="screenshotModal"/)
+    assert.match(html, /id="modalDownload"/)
+    assert.match(html, /id="modalClose"/)
+    assert.match(html, /addEventListener\('click',openScreenshot\)/)
+    assert.match(html, /download=screenshotFilename\(\)/)
+    assert.match(html, /currentScreenshot\?\.mimeType==='image\/png'\?'png'/)
+    assert.match(html, /currentScreenshot\?\.mimeType==='image\/webp'\?'webp'/)
+    assert.match(html, /data-phase="profiling_experience"/)
+    assert.match(html, /本机通道/)
+    assert.match(html, /正在连接本机 Agent 与当前浏览器 profile/)
+    assert.match(html, /本页只服务当前一次采集/)
     assert.match(html, new RegExp(`id="stackprism-agent-bridge-config" type="application/json" nonce="${cspNonce}"`))
+    assert.match(html, new RegExp(`<style nonce="${cspNonce}"`))
     assert.match(html, new RegExp(`<script nonce="${cspNonce}"`))
     assert.match(html, /fetch\('\/v1\/captures\/'\+config\.captureId/)
     assert.match(html, /textContent=value/)
@@ -823,7 +843,19 @@ test('python fallback bridge token can fetch request and post profile', async ()
 
     await acceptFinalUrl(ready, created.body.id, config.bridgeToken)
 
-    const profile = profileFor(created.body.id)
+    const profile = profileFor(created.body.id, {
+      visualProfile: {
+        screenshot: {
+          dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn',
+          mimeType: 'image/jpeg',
+          byteLength: 9,
+          scope: 'visible_viewport'
+        }
+      },
+      evidence: {
+        privateText: 'not for bridge status'
+      }
+    })
     const posted = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/profile`, {
         method: 'POST',
@@ -834,6 +866,10 @@ test('python fallback bridge token can fetch request and post profile', async ()
     assert.equal(posted.status, 200)
     assertJsonSecurityHeaders(posted)
     assert.equal(posted.body.status, 'completed')
+    assert.equal(posted.body.preview.targetUrl, 'https://93.184.216.34/app?[redacted]')
+    assert.equal(posted.body.preview.screenshot.dataUrl, 'data:image/jpeg;base64,ZmFrZS1qcGVn')
+    assert.equal(posted.body.preview.screenshot.scope, 'visible_viewport')
+    assert.equal(JSON.stringify(posted.body).includes('not for bridge status'), false)
 
     const completedControl = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/control`, {
@@ -843,6 +879,16 @@ test('python fallback bridge token can fetch request and post profile', async ()
     assert.equal(completedControl.status, 200)
     assert.equal(completedControl.body.command, 'cancel')
     assert.equal(completedControl.body.status, 'completed')
+
+    const completedStatus = await readJson(
+      await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}`, {
+        headers: { Authorization: `Bearer ${config.bridgeToken}` }
+      })
+    )
+    assert.equal(completedStatus.status, 200)
+    assert.equal(completedStatus.body.preview.targetUrl, 'https://93.184.216.34/app?[redacted]')
+    assert.equal(completedStatus.body.preview.screenshot.mimeType, 'image/jpeg')
+    assert.equal(JSON.stringify(completedStatus.body).includes('not for bridge status'), false)
 
     const forbidden = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/profile`, {
@@ -861,6 +907,39 @@ test('python fallback bridge token can fetch request and post profile', async ()
     assert.equal(fetched.status, 200)
     assertJsonSecurityHeaders(fetched, { referrerPolicy: true })
     assert.equal(fetched.body.schema, 'stackprism.site_experience_profile.v1')
+  } finally {
+    child.kill('SIGTERM')
+    await once(child, 'exit')
+  }
+})
+
+test('python fallback status preview derives screenshot mime type from the data URL', async () => {
+  const { child, ready } = await startPythonBridge()
+  try {
+    const created = await createCapture(ready)
+    const config = await loadBridgeConfig(created.body.bridgeUrl)
+    await acceptFinalUrl(ready, created.body.id, config.bridgeToken)
+
+    const profile = profileFor(created.body.id, {
+      visualProfile: {
+        screenshot: {
+          dataUrl: 'data:image/webp;base64,ZmFrZS13ZWJw',
+          mimeType: 'image/jpeg',
+          byteLength: 9,
+          scope: 'visible_viewport'
+        }
+      }
+    })
+    const posted = await readJson(
+      await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/profile`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.bridgeToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile)
+      })
+    )
+
+    assert.equal(posted.status, 200)
+    assert.equal(posted.body.preview.screenshot.mimeType, 'image/webp')
   } finally {
     child.kill('SIGTERM')
     await once(child, 'exit')
@@ -1672,6 +1751,42 @@ print(json.dumps({"queued": queued["error"]["code"], "target_opening": target_op
   assert.equal(parsed.running, 'CAPTURE_TIMEOUT')
 })
 
+test('python fallback actively expires completed profiles without a later request', () => {
+  const parsed = pythonOneShot(`
+from stackprism_bridge_lib.capture_store import CaptureStore
+request = ${JSON.stringify(request)}
+clock = {"now": 1000}
+scheduled = []
+class FakeTimer:
+    def __init__(self, delay, callback):
+        self.delay = delay
+        self.callback = callback
+        self.daemon = False
+        self.started = False
+        self.cancelled = False
+        scheduled.append(self)
+    def start(self):
+        self.started = True
+    def cancel(self):
+        self.cancelled = True
+store = CaptureStore("http://127.0.0.1:17370", now=lambda: clock["now"], open_browser_fn=lambda _url: (True, {}), result_ttl_seconds=0.25, timer_factory=FakeTimer)
+capture, _status, _err = store.create(request)
+store.mark_profile(capture, {"schema": "stackprism.site_experience_profile.v1", "captureId": capture["id"]})
+before = {"status": capture["status"], "hasProfile": capture["profile"] is not None, "delay": scheduled[0].delay, "started": scheduled[0].started}
+clock["now"] = capture["resultExpiresAt"] + 0.01
+scheduled[0].callback()
+after = {"status": capture["status"], "profile": capture["profile"], "error": capture["error"]["code"]}
+print(json.dumps({"before": before, "after": after}, sort_keys=True))
+`)
+  assert.equal(parsed.before.status, 'completed')
+  assert.equal(parsed.before.hasProfile, true)
+  assert.equal(parsed.before.delay, 0.25)
+  assert.equal(parsed.before.started, true)
+  assert.equal(parsed.after.status, 'expired')
+  assert.equal(parsed.after.profile, null)
+  assert.equal(parsed.after.error, 'CAPTURE_RESULT_EXPIRED')
+})
+
 test('python fallback does not timeout captures with missing optional deadlines', () => {
   const parsed = pythonOneShot(`
 from stackprism_bridge_lib.capture_store import CaptureStore
@@ -1949,6 +2064,16 @@ test('python fallback rejects private, self-target, and cross-origin capture req
     assert.equal(invalidBooleanOption.status, 400)
     assert.equal(invalidBooleanOption.body.error.code, 'INVALID_REQUEST')
 
+    const invalidScreenshotOption = await readJson(
+      await fetch(`${ready.baseUrl}/v1/captures`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ready.apiToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...request, options: { captureScreenshot: 'true', targetMode: 'reuse_or_new_tab' } })
+      })
+    )
+    assert.equal(invalidScreenshotOption.status, 400)
+    assert.equal(invalidScreenshotOption.body.error.code, 'INVALID_REQUEST')
+
     const privateTarget = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures`, {
         method: 'POST',
@@ -2002,6 +2127,31 @@ test('python fallback rejects private, self-target, and cross-origin capture req
     )
     assert.equal(crossOrigin.status, 403)
     assert.equal(crossOrigin.body.error.code, 'ORIGIN_NOT_ALLOWED')
+  } finally {
+    child.kill('SIGTERM')
+    await once(child, 'exit')
+  }
+})
+
+test('python fallback normalizes optional screenshot requests', async () => {
+  const { child, ready } = await startPythonBridge()
+  try {
+    const created = await readJson(
+      await fetch(`${ready.baseUrl}/v1/captures`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ready.apiToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...request, include: ['visual'], options: { captureScreenshot: true, targetMode: 'reuse_or_new_tab' } })
+      })
+    )
+    assert.equal(created.status, 200)
+    const config = await loadBridgeConfig(created.body.bridgeUrl)
+    const requestEnvelope = await readJson(
+      await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/request`, {
+        headers: { Authorization: `Bearer ${config.bridgeToken}` }
+      })
+    )
+    assert.equal(requestEnvelope.status, 200)
+    assert.equal(requestEnvelope.body.request.options.captureScreenshot, true)
   } finally {
     child.kill('SIGTERM')
     await once(child, 'exit')

@@ -12,12 +12,16 @@ const captureDeadlineError = capture =>
     : { code: 'CAPTURE_TIMEOUT', message: 'Capture timed out.' }
 
 export class CaptureStore {
-  constructor({ baseUrl, openBrowser, now = () => Date.now() }) {
+  constructor({ baseUrl, openBrowser, now = () => Date.now(), resultTtlMs = RESULT_TTL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout }) {
     this.baseUrl = baseUrl
     this.openBrowser = openBrowser
     this.now = now
+    this.resultTtlMs = resultTtlMs
+    this.setTimeout = setTimeoutFn
+    this.clearTimeout = clearTimeoutFn
     this.captures = new Map()
     this.captureLocks = new Map()
+    this.resultExpiryTimers = new Map()
   }
 
   async withCaptureLock(id, task) {
@@ -87,12 +91,32 @@ export class CaptureStore {
     return { ok: true, capture }
   }
 
+  clearResultExpiryTimer(captureId) {
+    const timer = this.resultExpiryTimers.get(captureId)
+    if (!timer) return
+    this.clearTimeout(timer)
+    this.resultExpiryTimers.delete(captureId)
+  }
+
+  scheduleResultExpiry(capture) {
+    this.clearResultExpiryTimer(capture.id)
+    if (!capture.resultExpiresAt) return
+    const delayMs = Math.max(0, capture.resultExpiresAt - this.now())
+    const timer = this.setTimeout(() => {
+      this.resultExpiryTimers.delete(capture.id)
+      this.expireIfNeeded(capture)
+    }, delayMs)
+    timer?.unref?.()
+    this.resultExpiryTimers.set(capture.id, timer)
+  }
+
   expireIfNeeded(capture) {
     const now = this.now()
     if (capture.status === 'completed' && capture.resultExpiresAt && capture.resultExpiresAt <= now) {
       capture.status = 'expired'
       capture.profile = null
       capture.error = { code: 'CAPTURE_RESULT_EXPIRED', message: 'Capture result expired.' }
+      this.clearResultExpiryTimer(capture.id)
     }
     if (['queued', 'waiting_extension'].includes(capture.status) && capture.extensionDeadlineAt <= now) {
       capture.status = 'failed'
@@ -125,6 +149,7 @@ export class CaptureStore {
       .filter(capture => !['queued', 'waiting_extension', 'running', 'cancel_requested'].includes(capture.status))
       .sort((left, right) => left.createdAt - right.createdAt)
     for (const capture of terminal.slice(0, overflow)) {
+      this.clearResultExpiryTimer(capture.id)
       this.captures.delete(capture.id)
     }
   }
@@ -133,7 +158,8 @@ export class CaptureStore {
     capture.status = 'completed'
     capture.phase = 'cleanup'
     capture.profile = profile
-    capture.resultExpiresAt = this.now() + RESULT_TTL_MS
+    capture.resultExpiresAt = this.now() + this.resultTtlMs
+    this.scheduleResultExpiry(capture)
   }
 
   requestCancel(capture) {
@@ -142,6 +168,7 @@ export class CaptureStore {
   }
 
   clear() {
+    for (const captureId of this.resultExpiryTimers.keys()) this.clearResultExpiryTimer(captureId)
     this.captures.clear()
   }
 }

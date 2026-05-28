@@ -5,9 +5,9 @@ const includeOrder = ['tech', 'visual', 'layout', 'components', 'interaction', '
 const targetModes = new Set(['reuse_or_new_tab', 'new_tab', 'active_tab'])
 const requestKeys = new Set(['url', 'mode', 'waitMs', 'include', 'viewports', 'options'])
 const optionKeys = new Set(
-  'forceRefresh captureScreenshotMetadata keepTabOpen allowPrivateNetworkTarget targetMode maxResourceUrls'.split(' ')
+  'forceRefresh captureScreenshotMetadata captureScreenshot keepTabOpen allowPrivateNetworkTarget targetMode maxResourceUrls'.split(' ')
 )
-const booleanOptionKeys = ['forceRefresh', 'captureScreenshotMetadata', 'keepTabOpen', 'allowPrivateNetworkTarget']
+const booleanOptionKeys = ['forceRefresh', 'captureScreenshotMetadata', 'captureScreenshot', 'keepTabOpen', 'allowPrivateNetworkTarget']
 const DNS_LOOKUP_TIMEOUT_MS = 2000
 
 const isPlainRecord = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -264,6 +264,7 @@ export const normalizeCaptureRequest = async (body, bridgeOrigin, { resolveHostn
       options: {
         forceRefresh: options.forceRefresh === true,
         captureScreenshotMetadata: options.captureScreenshotMetadata === true,
+        captureScreenshot: options.captureScreenshot === true,
         keepTabOpen: options.keepTabOpen === true,
         allowPrivateNetworkTarget: options.allowPrivateNetworkTarget === true,
         targetMode,

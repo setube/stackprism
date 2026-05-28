@@ -1,8 +1,4 @@
-from .protocol import PROTOCOL_VERSION, html_escape_script_json, new_csp_nonce
-from .status import FINAL_STATES
-
-
-BRIDGE_PAGE_STYLE = """
+const bridgePageStyle = `
 :root{color-scheme:light;--sp-bg:#f4f8f7;--sp-panel:#ffffff;--sp-line:#c7e2db;--sp-ink:#132127;--sp-muted:#5e6c78;--sp-accent:#0f766e;--sp-soft:#e9f7f3;--sp-warn:#a45a00;--sp-danger:#b42318}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:linear-gradient(180deg,#f9fbfb 0%,var(--sp-bg) 100%);color:var(--sp-ink);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -55,48 +51,30 @@ body{margin:0;min-height:100vh;background:linear-gradient(180deg,#f9fbfb 0%,var(
 .bridge-card[data-status="failed"] .bridge-badge,.bridge-card[data-status="expired"] .bridge-badge{border-color:#f0b7b2;background:#fff5f5;color:var(--sp-danger)}
 .bridge-card[data-status="cancelled"] .bridge-badge{border-color:#f0d2a8;background:#fff8ed;color:var(--sp-warn)}
 @media (max-width:680px){.bridge-shell{padding:16px}.bridge-header{grid-template-columns:auto 1fr;padding:22px}.bridge-badge{grid-column:1/-1;justify-self:start}.bridge-body{padding:22px}.preview-panel{grid-template-columns:1fr}.steps{grid-template-columns:1fr}.bridge-title{font-size:22px}.screenshot-modal{padding:14px}.modal-bar{align-items:flex-start;flex-direction:column}.modal-actions{width:100%;justify-content:flex-end}}
-"""
+`
 
-BRIDGE_PAGE_SCRIPT = """
-const statusEl=document.getElementById('status');
-const stateLabelEl=document.getElementById('stateLabel');
-const badgeEl=document.getElementById('statusBadge');
-const progressEl=document.getElementById('progressBar');
-const cardEl=document.getElementById('bridgeCard');
-const targetUrlEl=document.getElementById('targetUrl');
-const screenshotFrameEl=document.getElementById('screenshotFrame');
-const screenshotImgEl=document.getElementById('targetScreenshot');
-const screenshotDownloadEl=document.getElementById('screenshotDownload');
-const screenshotModalEl=document.getElementById('screenshotModal');
-const modalImageEl=document.getElementById('modalScreenshot');
-const modalCloseEl=document.getElementById('modalClose');
-const modalDownloadEl=document.getElementById('modalDownload');
-const stepEls=[...document.querySelectorAll('[data-phase]')];
+const bridgePageScript = `
 const config=JSON.parse(document.getElementById('stackprism-agent-bridge-config').textContent);
+const ids=['status','stateLabel','statusBadge','progressBar','bridgeCard','targetUrl','screenshotFrame','targetScreenshot','screenshotDownload','screenshotModal','modalScreenshot','modalClose','modalDownload'];
+const el=Object.fromEntries(ids.map(id=>[id,document.getElementById(id)]));
+const steps=[...document.querySelectorAll('[data-phase]')];
 let currentScreenshot=null;
 const phases=['bridge_connected','request_loaded','target_opening','target_loaded','detecting_tech','profiling_experience','posting_profile','cleanup'];
 const phaseLabels={bridge_connected:'扩展已连接',request_loaded:'读取采集请求',target_opening:'打开目标页面',target_loaded:'目标页面已加载',detecting_tech:'识别技术栈',profiling_experience:'分析视觉与体验',posting_profile:'回传 Profile',cleanup:'清理采集环境'};
 const statusLabels={queued:'等待扩展连接',waiting_extension:'等待扩展连接',running:'正在采集',cancel_requested:'正在取消',cancelled:'已取消',completed:'采集完成',failed:'采集失败',expired:'结果已过期'};
-const setStatus=(value)=>{statusEl.textContent=value};
+const finalStatuses=['completed','failed','cancelled','expired'];
+const setStatus=(value)=>{el.status.textContent=value};
 const screenshotExtension=()=>currentScreenshot?.mimeType==='image/png'?'png':currentScreenshot?.mimeType==='image/webp'?'webp':'jpg';
 const screenshotFilename=()=>('stackprism-'+config.captureId+'-screenshot.'+screenshotExtension());
 const setScreenshot=(screenshot)=>{
 currentScreenshot=screenshot?.dataUrl?screenshot:null;
-if(currentScreenshot){
-screenshotImgEl.src=currentScreenshot.dataUrl;
-modalImageEl.src=currentScreenshot.dataUrl;
-screenshotFrameEl.classList.add('has-image');
-screenshotFrameEl.disabled=false;
-screenshotDownloadEl.disabled=false;
-modalDownloadEl.disabled=false;
-}else{
-screenshotImgEl.removeAttribute('src');
-modalImageEl.removeAttribute('src');
-screenshotFrameEl.classList.remove('has-image');
-screenshotFrameEl.disabled=true;
-screenshotDownloadEl.disabled=true;
-modalDownloadEl.disabled=true;
-}
+el.targetScreenshot.toggleAttribute('src',false);
+el.modalScreenshot.toggleAttribute('src',false);
+if(currentScreenshot){el.targetScreenshot.src=currentScreenshot.dataUrl;el.modalScreenshot.src=currentScreenshot.dataUrl;}
+el.screenshotFrame.classList.toggle('has-image',Boolean(currentScreenshot));
+el.screenshotFrame.disabled=!currentScreenshot;
+el.screenshotDownload.disabled=!currentScreenshot;
+el.modalDownload.disabled=!currentScreenshot;
 };
 const downloadScreenshot=()=>{
 if(!currentScreenshot)return;
@@ -107,182 +85,76 @@ document.body.append(link);
 link.click();
 link.remove();
 };
-const openScreenshot=()=>{
-if(!currentScreenshot)return;
-screenshotModalEl.dataset.open='true';
-modalCloseEl.focus();
-};
-const closeScreenshot=()=>{
-screenshotModalEl.dataset.open='false';
-screenshotFrameEl.focus();
-};
+const openScreenshot=()=>{if(currentScreenshot){el.screenshotModal.dataset.open='true';el.modalClose.focus();}};
+const closeScreenshot=()=>{el.screenshotModal.dataset.open='false';el.screenshotFrame.focus();};
 const updateSteps=(phase,status)=>{
 const index=status==='completed'?phases.length-1:Math.max(0,phases.indexOf(phase));
-stepEls.forEach(step=>{
+steps.forEach(step=>{
 const stepIndex=phases.indexOf(step.dataset.phase);
 step.classList.toggle('done',stepIndex<index||status==='completed');
-step.classList.toggle('current',stepIndex===index&&!['completed','failed','cancelled','expired'].includes(status));
+step.classList.toggle('current',stepIndex===index&&!finalStatuses.includes(status));
 });
-progressEl.style.width=(status==='completed'?100:Math.max(8,Math.round(((index+1)/phases.length)*100)))+'%';
+el.progressBar.style.width=(status==='completed'?100:Math.max(8,Math.round(((index+1)/phases.length)*100)))+'%';
 };
 const render=(body)=>{
 const status=body?.status||'waiting_extension';
 const phase=body?.phase||'bridge_connected';
 const label=statusLabels[status]||status;
-const detail=body?.error?.code||phaseLabels[phase]||status;
 const preview=body?.preview||{};
-cardEl.dataset.status=status;
-stateLabelEl.textContent=label;
-badgeEl.textContent=label;
-setStatus(detail);
-targetUrlEl.textContent=preview.targetUrl||'等待读取目标网址';
-if(preview.screenshot?.dataUrl){
+el.bridgeCard.dataset.status=status;
+el.stateLabel.textContent=label;
+el.statusBadge.textContent=label;
+setStatus(body?.error?.code||phaseLabels[phase]||status);
+el.targetUrl.textContent=preview.targetUrl||'等待读取目标网址';
 setScreenshot(preview.screenshot);
-}else{
-setScreenshot(null);
-}
 updateSteps(phase,status);
 };
-screenshotFrameEl.addEventListener('click',openScreenshot);
-screenshotDownloadEl.addEventListener('click',downloadScreenshot);
-modalDownloadEl.addEventListener('click',downloadScreenshot);
-modalCloseEl.addEventListener('click',closeScreenshot);
-screenshotModalEl.addEventListener('click',(event)=>{if(event.target===screenshotModalEl)closeScreenshot();});
-document.addEventListener('keydown',(event)=>{if(event.key==='Escape'&&screenshotModalEl.dataset.open==='true')closeScreenshot();});
+el.screenshotFrame.addEventListener('click',openScreenshot);
+el.screenshotDownload.addEventListener('click',downloadScreenshot);
+el.modalDownload.addEventListener('click',downloadScreenshot);
+el.modalClose.addEventListener('click',closeScreenshot);
+el.screenshotModal.addEventListener('click',event=>{if(event.target===el.screenshotModal)closeScreenshot();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&el.screenshotModal.dataset.open==='true')closeScreenshot();});
 const poll=async()=>{
 try{
 const res=await fetch('/v1/captures/'+config.captureId,{headers:{Authorization:'Bearer '+config.bridgeToken},cache:'no-store'});
 const body=await res.json();
-if(!res.ok){render({status:'failed',phase:'cleanup',error:{code:body?.error?.code||'Bridge request failed.'}});return}
+if(!res.ok){render({status:'failed',phase:'cleanup',error:{code:body?.error?.code||'Bridge request failed.'}});return;}
 render(body);
-if(['completed','failed','cancelled','expired'].includes(body.status))return;
-}catch{
-render({status:'failed',phase:'cleanup',error:{code:'Bridge status unavailable.'}});
-}
+if(finalStatuses.includes(body.status))return;
+}catch{render({status:'failed',phase:'cleanup',error:{code:'Bridge status unavailable.'}});}
 setTimeout(poll,1000);
 };
 poll();
-"""
+`
 
-
-BRIDGE_PAGE_HTML_TEMPLATE = """<!doctype html>
+export const renderBridgePageHtml = (cspNonce, config) => `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="stackprism-agent-bridge" content="1">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>StackPrism Agent Bridge</title>
-<style nonce="{csp_nonce}">{style}</style>
+<style nonce="${cspNonce}">${bridgePageStyle}</style>
 </head>
 <body>
 <main class="bridge-shell">
 <section id="bridgeCard" class="bridge-card" data-status="waiting_extension" aria-labelledby="bridge-title">
 <header class="bridge-header">
 <div class="bridge-mark" aria-hidden="true">SP</div>
-<div>
-<p class="bridge-kicker">本机通道</p>
-<h1 id="bridge-title" class="bridge-title">StackPrism Agent Bridge</h1>
-<p class="bridge-copy">正在连接本机 Agent 与当前浏览器 profile，请保持本页打开。</p>
-</div>
+<div><p class="bridge-kicker">本机通道</p><h1 id="bridge-title" class="bridge-title">StackPrism Agent Bridge</h1><p class="bridge-copy">正在连接本机 Agent 与当前浏览器 profile，请保持本页打开。</p></div>
 <span id="statusBadge" class="bridge-badge">等待扩展连接</span>
 </header>
 <div class="bridge-body">
-<section class="status-panel" aria-live="polite">
-<div id="stateLabel" class="state-label">等待扩展连接</div>
-<p id="status" class="status-text">等待 StackPrism 扩展连接。</p>
-<div class="progress" aria-hidden="true"><span id="progressBar"></span></div>
-</section>
-<section class="preview-panel" aria-label="采集预览">
-<div>
-<p class="preview-label">目标网址</p>
-<p id="targetUrl" class="target-url">等待读取目标网址</p>
-</div>
-<div>
-<p class="preview-label">截图预览</p>
-<button id="screenshotFrame" class="screenshot-frame" type="button" disabled>
-<img id="targetScreenshot" alt="目标页面截图预览">
-<div class="screenshot-empty">采集完成后显示可用截图</div>
-</button>
-<div class="preview-actions"><button id="screenshotDownload" class="preview-button" type="button" disabled>下载截图</button></div>
-</div>
-</section>
-<ol class="steps">
-<li class="step current" data-phase="bridge_connected"><span class="step-index">1</span><div>扩展连接</div></li>
-<li class="step" data-phase="request_loaded"><span class="step-index">2</span><div>读取请求</div></li>
-<li class="step" data-phase="target_opening"><span class="step-index">3</span><div>打开目标</div></li>
-<li class="step" data-phase="target_loaded"><span class="step-index">4</span><div>页面加载</div></li>
-<li class="step" data-phase="detecting_tech"><span class="step-index">5</span><div>技术识别</div></li>
-<li class="step" data-phase="profiling_experience"><span class="step-index">6</span><div>体验分析</div></li>
-<li class="step" data-phase="posting_profile"><span class="step-index">7</span><div>回传 Profile</div></li>
-<li class="step" data-phase="cleanup"><span class="step-index">8</span><div>清理完成</div></li>
-</ol>
-<footer class="bridge-footer">
-<p class="bridge-note">本页只服务当前一次采集，不需要手动填写信息。</p>
-<div class="pills"><span class="pill">127.0.0.1</span><span class="pill">当前 profile</span><span class="pill">只读采集</span></div>
-</footer>
+<section class="status-panel" aria-live="polite"><div id="stateLabel" class="state-label">等待扩展连接</div><p id="status" class="status-text">等待 StackPrism 扩展连接。</p><div class="progress" aria-hidden="true"><span id="progressBar"></span></div></section>
+<section class="preview-panel" aria-label="采集预览"><div><p class="preview-label">目标网址</p><p id="targetUrl" class="target-url">等待读取目标网址</p></div><div><p class="preview-label">截图预览</p><button id="screenshotFrame" class="screenshot-frame" type="button" disabled><img id="targetScreenshot" alt="目标页面截图预览"><div class="screenshot-empty">采集完成后显示可用截图</div></button><div class="preview-actions"><button id="screenshotDownload" class="preview-button" type="button" disabled>下载截图</button></div></div></section>
+<ol class="steps"><li class="step current" data-phase="bridge_connected"><span class="step-index">1</span><div>扩展连接</div></li><li class="step" data-phase="request_loaded"><span class="step-index">2</span><div>读取请求</div></li><li class="step" data-phase="target_opening"><span class="step-index">3</span><div>打开目标</div></li><li class="step" data-phase="target_loaded"><span class="step-index">4</span><div>页面加载</div></li><li class="step" data-phase="detecting_tech"><span class="step-index">5</span><div>技术识别</div></li><li class="step" data-phase="profiling_experience"><span class="step-index">6</span><div>体验分析</div></li><li class="step" data-phase="posting_profile"><span class="step-index">7</span><div>回传 Profile</div></li><li class="step" data-phase="cleanup"><span class="step-index">8</span><div>清理完成</div></li></ol>
+<footer class="bridge-footer"><p class="bridge-note">本页只服务当前一次采集，不需要手动填写信息。</p><div class="pills"><span class="pill">127.0.0.1</span><span class="pill">当前 profile</span><span class="pill">只读采集</span></div></footer>
 </div>
 </section>
 </main>
-<section id="screenshotModal" class="screenshot-modal" data-open="false" aria-label="截图放大预览" role="dialog" aria-modal="true">
-<div class="modal-card">
-<div class="modal-bar"><p class="modal-title">截图预览</p><div class="modal-actions"><button id="modalDownload" class="modal-close" type="button" disabled>下载截图</button><button id="modalClose" class="modal-close" type="button">关闭</button></div></div>
-<img id="modalScreenshot" class="modal-image" alt="目标页面截图放大预览">
-</div>
-</section>
-<script id="stackprism-agent-bridge-config" type="application/json" nonce="{csp_nonce}">{config}</script>
-<script nonce="{csp_nonce}">{script}</script>
+<section id="screenshotModal" class="screenshot-modal" data-open="false" aria-label="截图放大预览" role="dialog" aria-modal="true"><div class="modal-card"><div class="modal-bar"><p class="modal-title">截图预览</p><div class="modal-actions"><button id="modalDownload" class="modal-close" type="button" disabled>下载截图</button><button id="modalClose" class="modal-close" type="button">关闭</button></div></div><img id="modalScreenshot" class="modal-image" alt="目标页面截图放大预览"></div></section>
+<script id="stackprism-agent-bridge-config" type="application/json" nonce="${cspNonce}">${config}</script>
+<script nonce="${cspNonce}">${bridgePageScript}</script>
 </body>
-</html>"""
-
-
-def render_bridge_page_html(csp_nonce, config):
-    return BRIDGE_PAGE_HTML_TEMPLATE.format(csp_nonce=csp_nonce, style=BRIDGE_PAGE_STYLE, config=config, script=BRIDGE_PAGE_SCRIPT)
-
-
-def render_bridge_page(handler, capture):
-    with handler.server.store._lock:
-        if capture["status"] == "expired":
-            response = ("fail", 410, "CAPTURE_RESULT_EXPIRED", "Capture result expired.", None)
-            config_data = None
-        elif capture["status"] in FINAL_STATES:
-            error = capture.get("error") or {}
-            response = (
-                "fail",
-                409,
-                error.get("code") or "INVALID_REQUEST",
-                "Capture is already terminal.",
-                {"status": capture["status"]},
-            )
-            config_data = None
-        elif capture["bridgeTokenRenderedAt"] or capture["bridgeTokenClaimedAt"]:
-            response = ("fail", 409, "INVALID_REQUEST", "Bridge token has already been rendered.", None)
-            config_data = None
-        else:
-            response = None
-            capture["bridgeTokenRenderedAt"] = handler.server.store.now()
-            config_data = {
-                "captureId": capture["id"],
-                "sessionId": capture["sessionId"],
-                "nonce": capture["nonce"],
-                "bridgeToken": capture["bridgeToken"],
-                "protocolVersion": PROTOCOL_VERSION,
-            }
-    if response:
-        handler.fail(response[1], response[2], response[3], response[4])
-        return
-    csp_nonce = new_csp_nonce()
-    config = html_escape_script_json(config_data)
-    handler.send_response(200)
-    handler.send_header("Content-Type", "text/html; charset=utf-8")
-    handler.send_header("Cache-Control", "no-store")
-    handler.send_header("Referrer-Policy", "no-referrer")
-    handler.send_header("X-Content-Type-Options", "nosniff")
-    handler.send_header("X-Frame-Options", "DENY")
-    handler.send_header("Cross-Origin-Opener-Policy", "same-origin")
-    handler.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
-    handler.send_header(
-        "Content-Security-Policy",
-        f"default-src 'none'; script-src 'nonce-{csp_nonce}'; style-src 'nonce-{csp_nonce}'; img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
-    )
-    handler.end_headers()
-    handler.wfile.write(render_bridge_page_html(csp_nonce, config).encode("utf-8"))
+</html>`

@@ -8,8 +8,16 @@ from .protocol import PROTOCOL_VERSION
 
 
 REQUEST_KEYS = {"url", "mode", "waitMs", "include", "viewports", "options"}
-OPTION_KEYS = {"forceRefresh", "captureScreenshotMetadata", "keepTabOpen", "allowPrivateNetworkTarget", "targetMode", "maxResourceUrls"}
-BOOLEAN_OPTION_KEYS = {"forceRefresh", "captureScreenshotMetadata", "keepTabOpen", "allowPrivateNetworkTarget"}
+OPTION_KEYS = {
+    "forceRefresh",
+    "captureScreenshotMetadata",
+    "captureScreenshot",
+    "keepTabOpen",
+    "allowPrivateNetworkTarget",
+    "targetMode",
+    "maxResourceUrls",
+}
+BOOLEAN_OPTION_KEYS = {"forceRefresh", "captureScreenshotMetadata", "captureScreenshot", "keepTabOpen", "allowPrivateNetworkTarget"}
 INCLUDE_ORDER = ["tech", "visual", "layout", "components", "interaction", "ux", "assets"]
 TARGET_MODES = {"reuse_or_new_tab", "new_tab", "active_tab"}
 DNS_LOOKUP_TIMEOUT_SECONDS = 2.0
@@ -144,6 +152,7 @@ def normalize_options(options):
     return {
         "forceRefresh": options.get("forceRefresh") is True,
         "captureScreenshotMetadata": options.get("captureScreenshotMetadata") is True,
+        "captureScreenshot": options.get("captureScreenshot") is True,
         "keepTabOpen": options.get("keepTabOpen") is True,
         "allowPrivateNetworkTarget": options.get("allowPrivateNetworkTarget") is True,
         "targetMode": target_mode,

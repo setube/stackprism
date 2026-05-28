@@ -25,7 +25,9 @@ const hasScreenshotPayloadKey = value => {
   if (Array.isArray(value)) return value.some(hasScreenshotPayloadKey)
   return Object.entries(value).some(
     ([key, item]) =>
-      /^(screenshot|screenshotData|imageData|pixelData|pixels|dataUrl|base64Image)$/i.test(key) || hasScreenshotPayloadKey(item)
+      /^(screenshotData|imageData|pixelData|pixels|dataUrl|base64Image)$/i.test(key) ||
+      (key === 'screenshot' && Boolean(item?.dataUrl)) ||
+      hasScreenshotPayloadKey(item)
   )
 }
 
@@ -1560,6 +1562,101 @@ const runPublicComplexTargetScenario = async () => {
   } finally {
     worker?.close()
     await harness.stopBridge(bridge)
+    await harness.cleanupChrome(chrome)
+  }
+}
+
+const runVisualScreenshotScenario = async () => {
+  ensureDistBuilt()
+  const harness = createBrowserSmokeHarness({ root, dist, cdpPort })
+  const fixture = await harness.startFixtureServer()
+  const chrome = await harness.startChrome()
+  let bridge
+  let worker
+  try {
+    const version = await harness.waitForCdp()
+    const workerTarget = await harness.waitForWorker()
+    worker = await harness.connectTarget(workerTarget)
+    await worker.send('Runtime.enable')
+    await harness.waitForExtensionRuntime(worker)
+    await harness.setAgentBridgeEnabled(worker, true)
+    bridge = await harness.startBridge()
+
+    const capture = await harness.createCapture(bridge.ready, {
+      url: fixture.url,
+      include: ['visual', 'layout', 'ux'],
+      waitMs: 100,
+      options: {
+        allowPrivateNetworkTarget: true,
+        captureScreenshot: true,
+        captureScreenshotMetadata: false,
+        keepTabOpen: false,
+        maxResourceUrls: 50,
+        targetMode: 'new_tab'
+      }
+    })
+    assert(capture.status === 200, `Visual screenshot capture creation failed: ${JSON.stringify(capture)}`)
+    const driven = await harness.driveCapture(bridge.ready, capture)
+    assert(driven.finalStatus?.status === 'completed', `Visual screenshot capture did not complete: ${JSON.stringify(driven.finalStatus)}`)
+    assert(driven.profile?.status === 200, `Visual screenshot profile read failed: ${JSON.stringify(driven.profile)}`)
+    const profile = profileSummary(driven.profile, capture.body.id)
+    const screenshot = driven.profile.body.visualProfile?.screenshot
+    const visualReference = driven.profile.body.agentGuidance?.recreationPlan?.visualReference
+    const screenshotFailureLimitations = [
+      'screenshot_capture_unavailable',
+      'screenshot_capture_invalid',
+      'screenshot_image_too_large',
+      'screenshot_capture_failed'
+    ]
+    if (profile?.screenshotPayloadPresent) {
+      assert(typeof screenshot?.dataUrl === 'string' && screenshot.dataUrl.startsWith('data:image/jpeg;base64,'), 'Screenshot data URL is invalid.')
+      assert(screenshot.mimeType === 'image/jpeg', `Unexpected screenshot mime type: ${screenshot.mimeType}`)
+      assert(screenshot.scope === 'visible_viewport', `Unexpected screenshot scope: ${screenshot.scope}`)
+      assert(Number.isInteger(screenshot.byteLength) && screenshot.byteLength > 1000, `Unexpected screenshot byte length: ${screenshot.byteLength}`)
+      assert(visualReference?.screenshotIncluded === true, 'Agent guidance did not mark screenshot as included.')
+    } else {
+      assert(
+        screenshotFailureLimitations.some(limitation => driven.profile.body.limitations.includes(limitation)),
+        `Visual screenshot request omitted payload without a screenshot limitation: ${JSON.stringify(driven.profile.body.limitations)}`
+      )
+      assert(visualReference?.screenshotIncluded === false, 'Agent guidance marked missing screenshot as included.')
+    }
+    assert(!driven.profile.body.limitations.includes('screenshot_image_not_requested'), 'Profile still reported screenshot not requested.')
+
+    console.log(
+      JSON.stringify(
+        {
+          browser: version.Browser,
+          dist,
+          scenario,
+          bridge: {
+            baseUrl: bridge.ready.baseUrl,
+            protocolVersion: bridge.ready.protocolVersion,
+            apiTokenPresent: Boolean(bridge.ready.apiToken)
+          },
+          visualScreenshot: {
+            status: driven.finalStatus.status,
+            phase: driven.finalStatus.phase,
+            profile,
+            screenshot: {
+              included: Boolean(profile.screenshotPayloadPresent),
+              mimeType: screenshot?.mimeType || '',
+              byteLength: screenshot?.byteLength || 0,
+              scope: screenshot?.scope || '',
+              source: screenshot?.source || ''
+            },
+            visualReference
+          },
+          bridgeStderrTail: redactText(bridge.stderr().slice(-500))
+        },
+        null,
+        2
+      )
+    )
+  } finally {
+    worker?.close()
+    await harness.stopBridge(bridge)
+    fixture.server.close()
     await harness.cleanupChrome(chrome)
   }
 }
@@ -3561,41 +3658,43 @@ const scenarioRunner =
                                       ? runTechOnlyScenario
                                       : scenario === 'public-complex-target'
                                         ? runPublicComplexTargetScenario
-                                        : scenario === 'service-worker-idle-wake'
-                                          ? runServiceWorkerIdleWakeScenario
-                                          : scenario === 'sequential-capture-pressure'
-                                            ? runSequentialCapturePressureScenario
-                                            : scenario === 'target-navigated-away'
-                                              ? runTargetNavigatedAwayScenario
-                                              : scenario === 'target-load-failed'
-                                                ? runTargetLoadFailedScenario
-                                                : scenario === 'target-load-timeout'
-                                                  ? runTargetLoadTimeoutScenario
-                                                  : scenario === 'target-mode-query-boundaries'
-                                                    ? runTargetModeQueryBoundariesScenario
-                                                    : scenario === 'bridge-iframe-blocked'
-                                                      ? runBridgeIframeBlockedScenario
-                                                      : scenario === 'wrong-profile-extension-missing'
-                                                        ? runWrongProfileExtensionMissingScenario
-                                                        : scenario === 'host-validation'
-                                                          ? runHostValidationScenario
-                                                          : scenario === 'response-headers-cors'
-                                                            ? runResponseHeadersCorsScenario
-                                                            : scenario === 'request-shell-rejections'
-                                                              ? runRequestShellRejectionsScenario
-                                                              : scenario === 'connection-pressure'
-                                                                ? runConnectionPressureScenario
-                                                                : scenario === 'resource-timeouts'
-                                                                  ? runResourceTimeoutsScenario
-                                                                  : scenario === 'rate-limit'
-                                                                    ? runRateLimitScenario
-                                                                    : scenario === 'profile-rate-limit'
-                                                                      ? runProfileRateLimitScenario
-                                                                      : scenario === 'target-url-validation'
-                                                                        ? runTargetUrlValidationScenario
-                                                                        : scenario === 'result-expiry-bridge-page'
-                                                                          ? runResultExpiryBridgePageScenario
-                                                                          : run
+                                        : scenario === 'visual-screenshot'
+                                          ? runVisualScreenshotScenario
+                                          : scenario === 'service-worker-idle-wake'
+                                            ? runServiceWorkerIdleWakeScenario
+                                            : scenario === 'sequential-capture-pressure'
+                                              ? runSequentialCapturePressureScenario
+                                              : scenario === 'target-navigated-away'
+                                                ? runTargetNavigatedAwayScenario
+                                                : scenario === 'target-load-failed'
+                                                  ? runTargetLoadFailedScenario
+                                                  : scenario === 'target-load-timeout'
+                                                    ? runTargetLoadTimeoutScenario
+                                                    : scenario === 'target-mode-query-boundaries'
+                                                      ? runTargetModeQueryBoundariesScenario
+                                                      : scenario === 'bridge-iframe-blocked'
+                                                        ? runBridgeIframeBlockedScenario
+                                                        : scenario === 'wrong-profile-extension-missing'
+                                                          ? runWrongProfileExtensionMissingScenario
+                                                          : scenario === 'host-validation'
+                                                            ? runHostValidationScenario
+                                                            : scenario === 'response-headers-cors'
+                                                              ? runResponseHeadersCorsScenario
+                                                              : scenario === 'request-shell-rejections'
+                                                                ? runRequestShellRejectionsScenario
+                                                                : scenario === 'connection-pressure'
+                                                                  ? runConnectionPressureScenario
+                                                                  : scenario === 'resource-timeouts'
+                                                                    ? runResourceTimeoutsScenario
+                                                                    : scenario === 'rate-limit'
+                                                                      ? runRateLimitScenario
+                                                                      : scenario === 'profile-rate-limit'
+                                                                        ? runProfileRateLimitScenario
+                                                                        : scenario === 'target-url-validation'
+                                                                          ? runTargetUrlValidationScenario
+                                                                          : scenario === 'result-expiry-bridge-page'
+                                                                            ? runResultExpiryBridgePageScenario
+                                                                            : run
 
 scenarioRunner().catch(error => {
   console.error(error instanceof Error ? error.message : String(error))

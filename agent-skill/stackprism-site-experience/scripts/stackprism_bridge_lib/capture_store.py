@@ -19,11 +19,14 @@ def capture_deadline_error(capture):
 
 
 class CaptureStore:
-    def __init__(self, base_url, now=time.time, open_browser_fn=open_browser):
+    def __init__(self, base_url, now=time.time, open_browser_fn=open_browser, result_ttl_seconds=RESULT_TTL_SECONDS, timer_factory=threading.Timer):
         self.base_url = base_url
         self.now = now
         self.open_browser = open_browser_fn
+        self.result_ttl_seconds = result_ttl_seconds
+        self.timer_factory = timer_factory
         self.captures = {}
+        self.result_expiry_timers = {}
         self._lock = threading.RLock()
 
     def active_count(self):
@@ -88,7 +91,31 @@ class CaptureStore:
             capture["profile"] = profile
             capture["status"] = "completed"
             capture["phase"] = "cleanup"
-            capture["resultExpiresAt"] = self.now() + RESULT_TTL_SECONDS
+            capture["resultExpiresAt"] = self.now() + self.result_ttl_seconds
+            self.schedule_result_expiry(capture)
+
+    def clear_result_expiry_timer(self, capture_id):
+        timer = self.result_expiry_timers.pop(capture_id, None)
+        if timer:
+            timer.cancel()
+
+    def schedule_result_expiry(self, capture):
+        self.clear_result_expiry_timer(capture["id"])
+        expires_at = capture.get("resultExpiresAt")
+        if not expires_at:
+            return
+        delay = max(0, expires_at - self.now())
+        timer = self.timer_factory(delay, lambda: self.expire_result_by_id(capture["id"]))
+        timer.daemon = True
+        self.result_expiry_timers[capture["id"]] = timer
+        timer.start()
+
+    def expire_result_by_id(self, capture_id):
+        with self._lock:
+            self.result_expiry_timers.pop(capture_id, None)
+            capture = self.captures.get(capture_id)
+            if capture:
+                self.expire_if_needed(capture)
 
     def expire_if_needed(self, capture):
         with self._lock:
@@ -97,6 +124,7 @@ class CaptureStore:
                 capture["status"] = "expired"
                 capture["profile"] = None
                 capture["error"] = error_body("CAPTURE_RESULT_EXPIRED", "Capture result expired.")["error"]
+                self.clear_result_expiry_timer(capture["id"])
             extension_deadline = capture.get("extensionDeadlineAt")
             if capture["status"] in {"queued", "waiting_extension"} and extension_deadline is not None and extension_deadline <= now:
                 capture["status"] = "failed"
@@ -119,4 +147,11 @@ class CaptureStore:
                 key=lambda item: item.get("createdAt", 0),
             )
             for item in terminal[:overflow]:
+                self.clear_result_expiry_timer(item["id"])
                 self.captures.pop(item["id"], None)
+
+    def clear(self):
+        with self._lock:
+            for capture_id in list(self.result_expiry_timers.keys()):
+                self.clear_result_expiry_timer(capture_id)
+            self.captures.clear()

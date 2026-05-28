@@ -143,7 +143,7 @@ const acceptFinalUrl = async (ready, captureId, bridgeToken, finalUrl = baseCapt
   assert.equal(envelope.body.phase, 'target_loaded')
 }
 
-const profileFor = captureId => ({
+const profileFor = (captureId, overrides = {}) => ({
   schema: 'stackprism.site_experience_profile.v1',
   captureId,
   generatedAt: new Date(0).toISOString(),
@@ -158,7 +158,8 @@ const profileFor = captureId => ({
   assetProfile: {},
   evidence: {},
   limitations: [],
-  agentGuidance: {}
+  agentGuidance: {},
+  ...overrides
 })
 
 test('js bridge protocol helpers use strict token comparison and script-safe JSON', () => {
@@ -280,6 +281,7 @@ test('bridge page renders bridge token once with hardened headers', async () => 
     assert.equal(csp.includes('unsafe-inline'), false)
     assert.match(csp, /default-src 'none'/)
     assert.match(csp, /connect-src 'self'/)
+    assert.match(csp, /img-src data:/)
     assert.match(csp, /frame-ancestors 'none'/)
     assert.match(csp, /base-uri 'none'/)
     assert.match(csp, /form-action 'none'/)
@@ -287,7 +289,24 @@ test('bridge page renders bridge token once with hardened headers', async () => 
     assert.match(csp, new RegExp(`style-src 'nonce-${cspNonce}'`))
     assert.equal(first.headers.get('x-frame-options'), 'DENY')
     assert.match(html, /meta name="stackprism-agent-bridge" content="1"/)
+    assert.match(html, /class="bridge-card"/)
+    assert.match(html, /id="progressBar"/)
+    assert.match(html, /id="targetUrl"/)
+    assert.match(html, /id="targetScreenshot"/)
+    assert.match(html, /id="screenshotDownload"/)
+    assert.match(html, /id="screenshotModal"/)
+    assert.match(html, /id="modalDownload"/)
+    assert.match(html, /id="modalClose"/)
+    assert.match(html, /addEventListener\('click',openScreenshot\)/)
+    assert.match(html, /download=screenshotFilename\(\)/)
+    assert.match(html, /currentScreenshot\?\.mimeType==='image\/png'\?'png'/)
+    assert.match(html, /currentScreenshot\?\.mimeType==='image\/webp'\?'webp'/)
+    assert.match(html, /data-phase="profiling_experience"/)
+    assert.match(html, /本机通道/)
+    assert.match(html, /正在连接本机 Agent 与当前浏览器 profile/)
+    assert.match(html, /本页只服务当前一次采集/)
     assert.match(html, new RegExp(`id="stackprism-agent-bridge-config" type="application/json" nonce="${cspNonce}"`))
+    assert.match(html, new RegExp(`<style nonce="${cspNonce}"`))
     assert.match(html, new RegExp(`<script nonce="${cspNonce}"`))
     assert.match(html, /fetch\('\/v1\/captures\/'\+config\.captureId/)
     assert.match(html, /textContent=value/)
@@ -451,7 +470,19 @@ test('bridge token can fetch request and post profile but cannot read profile', 
 
     await acceptFinalUrl(ready, created.body.id, config.bridgeToken)
 
-    const profile = profileFor(created.body.id)
+    const profile = profileFor(created.body.id, {
+      visualProfile: {
+        screenshot: {
+          dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn',
+          mimeType: 'image/jpeg',
+          byteLength: 9,
+          scope: 'visible_viewport'
+        }
+      },
+      evidence: {
+        privateText: 'not for bridge status'
+      }
+    })
     const posted = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/profile`, {
         method: 'POST',
@@ -462,6 +493,10 @@ test('bridge token can fetch request and post profile but cannot read profile', 
     assert.equal(posted.status, 200)
     assertJsonSecurityHeaders(posted)
     assert.equal(posted.body.status, 'completed')
+    assert.equal(posted.body.preview.targetUrl, 'https://93.184.216.34/app?[redacted]')
+    assert.equal(posted.body.preview.screenshot.dataUrl, 'data:image/jpeg;base64,ZmFrZS1qcGVn')
+    assert.equal(posted.body.preview.screenshot.scope, 'visible_viewport')
+    assert.equal(JSON.stringify(posted.body).includes('not for bridge status'), false)
 
     const completedControl = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/control`, { headers: auth(config.bridgeToken) })
@@ -469,6 +504,14 @@ test('bridge token can fetch request and post profile but cannot read profile', 
     assert.equal(completedControl.status, 200)
     assert.equal(completedControl.body.command, 'cancel')
     assert.equal(completedControl.body.status, 'completed')
+
+    const completedStatus = await readJson(
+      await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}`, { headers: auth(config.bridgeToken) })
+    )
+    assert.equal(completedStatus.status, 200)
+    assert.equal(completedStatus.body.preview.targetUrl, 'https://93.184.216.34/app?[redacted]')
+    assert.equal(completedStatus.body.preview.screenshot.mimeType, 'image/jpeg')
+    assert.equal(JSON.stringify(completedStatus.body).includes('not for bridge status'), false)
 
     const forbidden = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/profile`, { headers: auth(config.bridgeToken) })
@@ -483,6 +526,35 @@ test('bridge token can fetch request and post profile but cannot read profile', 
     assert.equal(fetched.status, 200)
     assertJsonSecurityHeaders(fetched, { referrerPolicy: true })
     assert.equal(fetched.body.schema, 'stackprism.site_experience_profile.v1')
+  })
+})
+
+test('bridge status preview derives screenshot mime type from the data URL', async () => {
+  await withBridge(async ready => {
+    const created = await createCapture(ready)
+    const config = await loadBridgeConfig(created.body.bridgeUrl)
+    await acceptFinalUrl(ready, created.body.id, config.bridgeToken)
+
+    const profile = profileFor(created.body.id, {
+      visualProfile: {
+        screenshot: {
+          dataUrl: 'data:image/png;base64,ZmFrZS1wbmc=',
+          mimeType: 'image/jpeg',
+          byteLength: 8,
+          scope: 'visible_viewport'
+        }
+      }
+    })
+    const posted = await readJson(
+      await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/profile`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.bridgeToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile)
+      })
+    )
+
+    assert.equal(posted.status, 200)
+    assert.equal(posted.body.preview.screenshot.mimeType, 'image/png')
   })
 })
 
@@ -680,6 +752,36 @@ test('capture store can actively prune expired completed profiles', () => {
 
   now = created.capture.resultExpiresAt + 1
   store.pruneExpiredResults()
+  assert.equal(created.capture.status, 'expired')
+  assert.equal(created.capture.profile, null)
+  assert.equal(created.capture.error.code, 'CAPTURE_RESULT_EXPIRED')
+})
+
+test('capture store actively expires completed profiles without a later request', async () => {
+  let now = 1000
+  const scheduled = []
+  const store = new CaptureStore({
+    baseUrl: 'http://127.0.0.1:17370',
+    openBrowser: () => ({ ok: true }),
+    now: () => now,
+    resultTtlMs: 25,
+    setTimeoutFn: (callback, delay) => {
+      scheduled.push({ callback, delay, cleared: false })
+      return scheduled.at(-1)
+    },
+    clearTimeoutFn: timer => {
+      timer.cleared = true
+    }
+  })
+  const created = store.create(baseCaptureRequest)
+  assert.equal(created.ok, true)
+  store.markProfile(created.capture, profileFor(created.capture.id))
+  assert.equal(scheduled.length, 1)
+  assert.equal(scheduled[0].delay, 25)
+  assert.ok(created.capture.profile)
+
+  now = created.capture.resultExpiresAt + 1
+  scheduled[0].callback()
   assert.equal(created.capture.status, 'expired')
   assert.equal(created.capture.profile, null)
   assert.equal(created.capture.error.code, 'CAPTURE_RESULT_EXPIRED')
@@ -1020,6 +1122,21 @@ test('url policy rejects fixture-resolved private hostnames without real DNS', a
   )
   assert.equal(invalidBooleanOption.ok, false)
   assert.equal(invalidBooleanOption.code, 'INVALID_REQUEST')
+
+  const screenshotOption = await normalizeCaptureRequest(
+    { ...baseCaptureRequest, options: { ...baseCaptureRequest.options, captureScreenshot: true } },
+    'http://127.0.0.1:17370',
+    { resolveHostname: async () => [{ address: '93.184.216.34', family: 4 }] }
+  )
+  assert.equal(screenshotOption.ok, true)
+  assert.equal(screenshotOption.request.options.captureScreenshot, true)
+
+  const invalidScreenshotOption = await normalizeCaptureRequest(
+    { ...baseCaptureRequest, options: { ...baseCaptureRequest.options, captureScreenshot: 'true' } },
+    'http://127.0.0.1:17370'
+  )
+  assert.equal(invalidScreenshotOption.ok, false)
+  assert.equal(invalidScreenshotOption.code, 'INVALID_REQUEST')
 
   for (const item of [
     { request: { ...baseCaptureRequest, waitMs: null }, field: 'waitMs null' },

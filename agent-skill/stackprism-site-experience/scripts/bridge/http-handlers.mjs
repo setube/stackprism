@@ -1,4 +1,5 @@
-import { fail, htmlEscapeScriptJson, isKnownBridgeErrorCode, json, newCspNonce, protocolVersion, safeEqual } from './protocol.mjs'
+import { fail, htmlEscapeScriptJson, isKnownBridgeErrorCode, json, newCspNonce, protocolVersion, redactUrl, safeEqual } from './protocol.mjs'
+import { renderBridgePageHtml } from './bridge-page.mjs'
 
 export const finalStates = new Set(['completed', 'failed', 'cancelled', 'expired'])
 
@@ -37,10 +38,37 @@ export const scopeForEndpoint = (method, endpoint) => {
   return method === 'GET' && endpoint === 'profile' ? 'status' : 'api'
 }
 
+const screenshotDataUrlPattern = /^data:image\/(jpeg|png|webp);base64,/
+
+const screenshotPreview = capture => {
+  const screenshot = capture.profile?.visualProfile?.screenshot
+  const match = typeof screenshot?.dataUrl === 'string' ? screenshot.dataUrl.match(screenshotDataUrlPattern) : null
+  if (!match) {
+    return null
+  }
+  return {
+    dataUrl: screenshot.dataUrl,
+    mimeType: `image/${match[1]}`,
+    byteLength: screenshot.byteLength,
+    scope: screenshot.scope
+  }
+}
+
+const previewForCapture = capture => {
+  const targetUrl = redactUrl(capture.finalUrl || capture.request?.url)
+  const preview = {}
+  if (targetUrl) preview.targetUrl = targetUrl
+  const screenshot = capture.status === 'completed' ? screenshotPreview(capture) : null
+  if (screenshot) preview.screenshot = screenshot
+  return Object.keys(preview).length ? preview : undefined
+}
+
 export const publicStatus = capture => {
   const status = { id: capture.id, status: capture.status }
   if (capture.phase) status.phase = capture.phase
   if (capture.error) status.error = capture.error
+  const preview = previewForCapture(capture)
+  if (preview) status.preview = preview
   return status
 }
 
@@ -143,10 +171,7 @@ export const renderBridge = (res, capture) => {
     'X-Frame-Options': 'DENY',
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
-    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${cspNonce}'; style-src 'nonce-${cspNonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`
+    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${cspNonce}'; style-src 'nonce-${cspNonce}'; img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`
   })
-  const statusScript = `const statusEl=document.getElementById('status');const config=JSON.parse(document.getElementById('stackprism-agent-bridge-config').textContent);const setStatus=(value)=>{statusEl.textContent=value};const poll=async()=>{try{const res=await fetch('/v1/captures/'+config.captureId,{headers:{Authorization:'Bearer '+config.bridgeToken},cache:'no-store'});const body=await res.json();if(!res.ok){setStatus(body?.error?.code||'Bridge request failed.');return}setStatus(body.status+(body.phase?' / '+body.phase:''));if(['completed','failed','cancelled','expired'].includes(body.status))return}catch{setStatus('Bridge status unavailable.')}setTimeout(poll,1000)};poll();`
-  res.end(
-    `<!doctype html><html><head><meta charset="utf-8"><meta name="stackprism-agent-bridge" content="1"><title>StackPrism Agent Bridge</title></head><body><p id="status">Waiting for StackPrism extension.</p><script id="stackprism-agent-bridge-config" type="application/json" nonce="${cspNonce}">${config}</script><script nonce="${cspNonce}">${statusScript}</script></body></html>`
-  )
+  res.end(renderBridgePageHtml(cspNonce, config))
 }

@@ -1,4 +1,6 @@
-from .protocol import PROTOCOL_VERSION, is_known_bridge_error_code
+import re
+
+from .protocol import PROTOCOL_VERSION, is_known_bridge_error_code, redact_url
 
 FINAL_STATES = {"completed", "failed", "cancelled", "expired"}
 PLUGIN_WRITABLE_STATUSES = {"waiting_extension", "running", "cancelled", "failed"}
@@ -13,6 +15,32 @@ STATUS_PHASES = [
     "cleanup",
 ]
 PHASE_ORDER = {phase: index for index, phase in enumerate(STATUS_PHASES)}
+SCREENSHOT_DATA_URL_PATTERN = re.compile(r"^data:image/(jpeg|png|webp);base64,")
+
+
+def screenshot_preview(profile):
+    screenshot = (((profile or {}).get("visualProfile") or {}).get("screenshot") or {})
+    data_url = screenshot.get("dataUrl")
+    match = SCREENSHOT_DATA_URL_PATTERN.match(data_url) if isinstance(data_url, str) else None
+    if not match:
+        return None
+    return {
+        "dataUrl": data_url,
+        "mimeType": f"image/{match.group(1)}",
+        "byteLength": screenshot.get("byteLength"),
+        "scope": screenshot.get("scope"),
+    }
+
+
+def public_preview(capture):
+    preview = {}
+    target_url = redact_url(capture.get("finalUrl") or (capture.get("request") or {}).get("url"))
+    if target_url:
+        preview["targetUrl"] = target_url
+    screenshot = screenshot_preview(capture.get("profile")) if capture["status"] == "completed" else None
+    if screenshot:
+        preview["screenshot"] = screenshot
+    return preview
 
 
 def public_status(capture):
@@ -21,6 +49,9 @@ def public_status(capture):
         status["phase"] = capture["phase"]
     if capture.get("error"):
         status["error"] = capture["error"]
+    preview = public_preview(capture)
+    if preview:
+        status["preview"] = preview
     return status
 
 

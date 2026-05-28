@@ -73,6 +73,7 @@ Call `POST /v1/captures` with `Authorization: Bearer {apiToken}`:
   "options": {
     "forceRefresh": true,
     "captureScreenshotMetadata": false,
+    "captureScreenshot": false,
     "keepTabOpen": false,
     "allowPrivateNetworkTarget": false,
     "targetMode": "reuse_or_new_tab",
@@ -85,6 +86,8 @@ Use the real target URL for the task. Do not treat `https://example.com` as the 
 
 Then poll `GET /v1/captures/{id}` and read `GET /v1/captures/{id}/profile` when status is `completed`.
 
+If the consuming model can read images, set `"captureScreenshot": true` with `include` containing `"visual"`. The profile will include `visualProfile.screenshot.dataUrl` when Chrome can capture the visible target viewport. This can briefly activate the target tab before returning to the bridge page. Treat it as optional evidence; models without image input should ignore it. The screenshot is kept in the bridge's in-memory profile and is cleared when the completed profile TTL expires or the bridge process exits. A user-downloaded screenshot file is managed by the browser download location and is not auto-deleted by StackPrism. The screenshot is not text-redacted pixel by pixel, so do not request it for login-protected or private user pages.
+
 Large pages can produce multi-chunk profile transfers. If the browser extension reports `BRIDGE_TRANSPORT_DISCONNECTED`, `PROFILE_TRANSPORT_FAILED`, `PROFILE_CHUNK_MISSING`, or `CAPTURE_TIMEOUT`, treat the capture as failed, stop the bridge child process, start a new bridge, and retry once with a smaller `include` set or lower `maxResourceUrls`. Do not synthesize a profile from partial chunks.
 
 Handle user-actionable failures explicitly:
@@ -96,6 +99,7 @@ Handle user-actionable failures explicitly:
 ## Use The Profile
 
 - Start from `agentGuidance.recreationPlan`. Follow its `implementationOrder`, then map `designTokens`, `layoutBlueprint`, `componentInventory`, `interactionChecklist`, `uxChecklist`, and `assetHints` into the target project.
+- Use `visualProfile.screenshot.dataUrl` as an optional visual reference only when it is present and your model supports image input.
 - Treat `techProfile` as implementation guidance, not a mandate to copy the source site's private stack.
 - Prioritize layout density, visual hierarchy, interaction feedback, and information architecture.
 - Respect `limitations`; missing fields may mean a section was not requested or was truncated.
