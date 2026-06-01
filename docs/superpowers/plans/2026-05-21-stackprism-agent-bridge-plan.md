@@ -15,7 +15,7 @@
 - 可用第一版已落地：扩展端 opt-in、bridge tab/session 隔离、capture orchestration、profile transfer、JS bridge、Python fallback、repo-local skill、release hygiene 和主要自动化契约均已实现。
 - 不能按原计划标记为全量完成：原计划仍有外部发布和 live browser gate，不能仅凭本机单元测试或 fixture smoke 关闭全部 gate。
 - 本机已收敛：本轮补齐 profile 语言字段、UX 一阶分类白名单、`agentGuidance.recreationPlan` 复刻执行计划、默认 browser smoke fixture-backed 成功路径、Task 10 状态矩阵，以及开发文档和审计文档的 gate 口径。
-- 外部或未触发 gate：Chrome Web Store / Edge Add-ons 更新链路和商店披露、运行中 idle-driven service worker eviction、精确 incognito `INCOGNITO_NOT_SUPPORTED` live 浏览器元数据路径、更广 DNS/private-network 和长时资源压力矩阵仍需保留为未完成边界。
+- 外部或未触发 gate：Chrome Web Store / Edge Add-ons 更新链路和商店后台实际接受状态、运行中 idle-driven service worker eviction、精确 incognito `INCOGNITO_NOT_SUPPORTED` live 浏览器元数据路径、更广 DNS/private-network 和长时资源压力矩阵仍需保留为未完成边界；商店披露已被发布 workflow 升级为打包前人工确认硬门禁，但不能由 worktree 自动证明后台审核状态。
 - 下方 Task 1 到 Task 9 保留为历史实施计划，已从 checkbox 改为 `Historical item:`，不再作为当前完成状态来源；当前状态以本节、Task 10 状态矩阵和 `docs/reviews/CR-AGENT-BRIDGE-*.md` 为准。
 
 ## 总目标
@@ -1243,7 +1243,7 @@ Current status source:
 | Incognito                                     | Unit complete; live metadata branch not proven                   | Content client and tab metadata tests cover `INCOGNITO_NOT_SUPPORTED`. Current CDP and `--incognito` live probes fail closed as `EXTENSION_NOT_CONNECTED` without target fetch or fake profile, so exact live metadata rejection remains a browser configuration gate.                                                                                                          |
 | Bridge page security and local trust boundary | Complete locally with stated boundary                            | Tests cover one-time token render, hostile query/fragment non-reflection, no-store/no-referrer/nosniff/CSP/nonce/frame restrictions, request-target/Host/Origin/Sec-Fetch checks and token redaction. The first version still trusts the local bridge process and does not defend against same-machine malicious processes or other same-profile extensions.                    |
 | Release artifact hygiene                      | Complete locally, rerun after build                              | Release workflow tests and `dist/` scans block `agent-skill/`, `docs/superpowers/`, tests, Python fallback files, local bridge server source and helper `.mjs` files from release artifacts; `dist/manifest.json` must not expose `externally_connectable` or agent-only WAR paths.                                                                                             |
-| Store release and disclosure                  | External gate                                                    | Chrome Web Store and Edge Add-ons update rollout, privacy/data-use disclosure acceptance and release note publication cannot be proven from the worktree.                                                                                                                                                                                                                       |
+| Store release and disclosure                  | Workflow-gated external gate                                     | Release workflow now fails before packaging Agent Bridge artifacts unless maintainers confirm disclosure via `agent_bridge_disclosure_confirmed=true` or a checked `- [x] Agent Bridge disclosure confirmed` release-note line. Chrome Web Store and Edge Add-ons update rollout plus privacy/data-use disclosure acceptance still must be proven from external dashboards.        |
 | Final git hygiene                             | Pending until branch closeout                                    | Before commit or push, run `git diff --check`, inspect `git status --short`, and confirm changed files are limited to Agent Bridge implementation, tests, docs and audit records.                                                                                                                                                                                               |
 
 Current local verification commands:
@@ -1284,7 +1284,7 @@ External gates retained after local completion:
 
 - Chrome Web Store update rollout.
 - Edge Add-ons update rollout.
-- Store privacy disclosure and release-note acceptance for Agent Bridge data use.
+- Store privacy disclosure acceptance for Agent Bridge data use; the GitHub release workflow enforces a maintainer confirmation before packaging but cannot prove external dashboard acceptance.
 - Running-capture natural service worker idle eviction exact live trigger.
 - Incognito bridge or target tab exact `INCOGNITO_NOT_SUPPORTED` live metadata path.
 - Broader long-duration resource exhaustion matrix across multiple machines and networks.

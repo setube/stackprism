@@ -125,6 +125,8 @@ smoke 结果按三类理解：
 - incognito bridge 或 target tab 的精确 `INCOGNITO_NOT_SUPPORTED` live metadata 分支。当前单元测试覆盖该分支，CDP/`--incognito` probes 在本机表现为 `EXTENSION_NOT_CONNECTED` fail-closed skip。
 - 多网络、多 DNS、多目标站点的长时资源压力矩阵。
 
+发布 workflow 会在打包前检查 Agent Bridge 是否出现在 `dist/manifest.json` 的 loopback content script 或 loopback web accessible resource 中。若出现，则必须通过 workflow_dispatch 输入 `agent_bridge_disclosure_confirmed=true`，或在 GitHub Release 正文中包含已勾选的 `- [x] Agent Bridge disclosure confirmed`；否则工作流失败。该门禁只能防止未确认披露就上传 release 资产，不能替代 Chrome Web Store / Edge Add-ons 后台的真实审核和发布状态。
+
 ## 验证命令
 
 ```bash

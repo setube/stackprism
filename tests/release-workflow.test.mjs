@@ -8,10 +8,20 @@ import { test } from 'node:test'
 const workflowSource = await readFile(new URL('../.github/workflows/release-extension.yml', import.meta.url), 'utf8')
 const normalizedWorkflowSource = workflowSource.replaceAll('\\/', '/')
 const hygieneScript = extractReleaseHygieneScript(workflowSource)
+const disclosureGateScript = extractNamedNodeScript(workflowSource, '校验 Agent Bridge 发布披露确认')
 
 function extractReleaseHygieneScript(source) {
   const match = source.match(/node --input-type=module <<'NODE'\n(?<script>[\s\S]*?)\n\s+NODE/)
   assert.ok(match?.groups?.script, 'release workflow must contain inline dist hygiene script')
+  return match.groups.script.replace(/^ {10}/gm, '')
+}
+
+function extractNamedNodeScript(source, stepName) {
+  const escapedStepName = stepName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = source.match(
+    new RegExp(`- name: ${escapedStepName}[\\s\\S]*?node --input-type=module <<'NODE'\\n(?<script>[\\s\\S]*?)\\n\\s+NODE`)
+  )
+  assert.ok(match?.groups?.script, `release workflow must contain ${stepName} inline script`)
   return match.groups.script.replace(/^ {10}/gm, '')
 }
 
@@ -39,6 +49,15 @@ function runHygieneScript(cwd) {
   })
 }
 
+function runDisclosureGateScript(cwd, env = {}) {
+  return spawnSync(process.execPath, ['--input-type=module'], {
+    cwd,
+    env: { ...process.env, ...env },
+    input: disclosureGateScript,
+    encoding: 'utf8'
+  })
+}
+
 function manifest(overrides = {}) {
   return JSON.stringify(
     {
@@ -51,6 +70,25 @@ function manifest(overrides = {}) {
     null,
     2
   )
+}
+
+function agentBridgeManifest(overrides = {}) {
+  return manifest({
+    content_scripts: [
+      {
+        js: ['assets/agent-bridge-client.ts-loader.js'],
+        matches: ['http://127.0.0.1/*'],
+        run_at: 'document_idle'
+      }
+    ],
+    web_accessible_resources: [
+      {
+        resources: ['assets/agent-bridge.js'],
+        matches: ['http://127.0.0.1/*']
+      }
+    ],
+    ...overrides
+  })
 }
 
 test('release workflow rejects agent bridge helper source files from dist artifacts', () => {
@@ -84,6 +122,7 @@ test('release workflow runs required gates before packaging artifacts', () => {
     /^ {8}run: pnpm run docs:build$/m,
     /^ {8}run: pnpm run build$/m,
     /^ {6}- name: 校验发布产物边界$/m,
+    /^ {6}- name: 校验 Agent Bridge 发布披露确认$/m,
     /^ {6}- name: 打包 zip$/m
   ]
   let previousIndex = -1
@@ -96,6 +135,12 @@ test('release workflow runs required gates before packaging artifacts', () => {
   }
 })
 
+test('release workflow requires Agent Bridge disclosure confirmation before packaging', () => {
+  assert.match(normalizedWorkflowSource, /agent_bridge_disclosure_confirmed/)
+  assert.match(normalizedWorkflowSource, /Agent Bridge disclosure confirmed/)
+  assert.match(normalizedWorkflowSource, /Chrome Web Store \/ Edge Add-ons privacy disclosure/)
+})
+
 test('release workflow dist hygiene script passes a clean dist artifact', async () => {
   await withDist(
     {
@@ -105,6 +150,68 @@ test('release workflow dist hygiene script passes a clean dist artifact', async 
     },
     cwd => {
       const result = runHygieneScript(cwd)
+      assert.equal(result.status, 0, result.stderr)
+    }
+  )
+})
+
+test('release workflow disclosure gate fails when Agent Bridge ships without confirmation', async () => {
+  await withDist(
+    {
+      'dist/manifest.json': agentBridgeManifest()
+    },
+    cwd => {
+      const result = runDisclosureGateScript(cwd, {
+        AGENT_BRIDGE_DISCLOSURE_CONFIRMED: 'false'
+      })
+      assert.equal(result.status, 1)
+      assert.match(result.stderr, /Agent Bridge is present in dist/)
+    }
+  )
+})
+
+test('release workflow disclosure gate accepts workflow dispatch confirmation', async () => {
+  await withDist(
+    {
+      'dist/manifest.json': agentBridgeManifest()
+    },
+    cwd => {
+      const result = runDisclosureGateScript(cwd, {
+        AGENT_BRIDGE_DISCLOSURE_CONFIRMED: 'true'
+      })
+      assert.equal(result.status, 0, result.stderr)
+    }
+  )
+})
+
+test('release workflow disclosure gate accepts checked release-note confirmation', async () => {
+  await withDist(
+    {
+      'dist/manifest.json': agentBridgeManifest(),
+      'event.json': JSON.stringify({
+        release: {
+          body: '- [x] Agent Bridge disclosure confirmed'
+        }
+      })
+    },
+    cwd => {
+      const result = runDisclosureGateScript(cwd, {
+        GITHUB_EVENT_PATH: join(cwd, 'event.json')
+      })
+      assert.equal(result.status, 0, result.stderr)
+    }
+  )
+})
+
+test('release workflow disclosure gate ignores artifacts without Agent Bridge', async () => {
+  await withDist(
+    {
+      'dist/manifest.json': manifest()
+    },
+    cwd => {
+      const result = runDisclosureGateScript(cwd, {
+        AGENT_BRIDGE_DISCLOSURE_CONFIRMED: 'false'
+      })
       assert.equal(result.status, 0, result.stderr)
     }
   )
