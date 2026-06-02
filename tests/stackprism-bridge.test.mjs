@@ -2142,26 +2142,32 @@ test('js bridge rejects private final URLs before profile creation', async () =>
 test('js bridge rejects private browser-observed target addresses', async () => {
   await withBridge(
     async ready => {
-      const created = await createCapture(ready)
-      const config = await loadBridgeConfig(created.body.bridgeUrl)
-      const status = await readJson(
-        await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/status`, {
-          method: 'POST',
-          headers: { ...auth(config.bridgeToken), 'Content-Type': 'application/json' },
-          body: JSON.stringify(
-            statusBody(created.body.id, config, {
-              status: 'running',
-              phase: 'target_loaded',
-              sequence: 1,
-              finalUrl: baseCaptureRequest.url,
-              targetNetworkAddress: '127.0.0.1'
-            })
-          )
-        })
-      )
-      assert.equal(status.status, 409)
-      assert.equal(status.body.error.code, 'FINAL_URL_BLOCKED')
-      assert.equal(status.body.error.details.reason, 'private_network_address')
+      for (const [label, extra] of [
+        ['direct private address', {}],
+        ['cached private address', { targetNetworkFromCache: true }]
+      ]) {
+        const created = await createCapture(ready)
+        const config = await loadBridgeConfig(created.body.bridgeUrl)
+        const status = await readJson(
+          await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/status`, {
+            method: 'POST',
+            headers: { ...auth(config.bridgeToken), 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+              statusBody(created.body.id, config, {
+                status: 'running',
+                phase: 'target_loaded',
+                sequence: 1,
+                finalUrl: baseCaptureRequest.url,
+                targetNetworkAddress: '127.0.0.1',
+                ...extra
+              })
+            )
+          })
+        )
+        assert.equal(status.status, 409, label)
+        assert.equal(status.body.error.code, 'FINAL_URL_BLOCKED', label)
+        assert.equal(status.body.error.details.reason, 'private_network_address', label)
+      }
     },
     {
       resolveHostname: async () => [{ address: '93.184.216.34', family: 4 }]
@@ -2199,6 +2205,40 @@ test('js bridge accepts proxy-reserved browser-observed addresses for public hos
       }
     }
   )
+})
+
+test('js bridge accepts public final URLs when browser network address is unavailable', async () => {
+  for (const [label, extra] of [
+    ['missing address', {}],
+    ['cached response', { targetNetworkFromCache: true }]
+  ]) {
+    await withBridge(
+      async ready => {
+        const created = await createCapture(ready)
+        const config = await loadBridgeConfig(created.body.bridgeUrl)
+        const status = await readJson(
+          await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/status`, {
+            method: 'POST',
+            headers: { ...auth(config.bridgeToken), 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+              statusBody(created.body.id, config, {
+                status: 'running',
+                phase: 'target_loaded',
+                sequence: 1,
+                finalUrl: baseCaptureRequest.url,
+                ...extra
+              })
+            )
+          })
+        )
+        assert.equal(status.status, 200, label)
+        assert.equal(status.body.phase, 'target_loaded', label)
+      },
+      {
+        resolveHostname: async () => [{ address: '93.184.216.34', family: 4 }]
+      }
+    )
+  }
 })
 
 test('js bridge rejects non-ip browser-observed target addresses', async () => {

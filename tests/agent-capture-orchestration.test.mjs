@@ -343,6 +343,9 @@ const waitForMessage = async (messages, predicate, timeoutMs = 1000) => {
   assert.fail('expected message was not observed before timeout')
 }
 
+const waitForProfileTransferComplete = env =>
+  waitForMessage(env.messages, message => message.type === 'AGENT_PROFILE_TRANSFER_COMPLETE')
+
 const waitForCondition = async (predicate, timeoutMs = 1000) => {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -493,33 +496,31 @@ test('agent capture network validation explains unverified browser evidence', as
   registerAgentCaptureNetworkObserver(() => assert.fail('network observer callback should not run'))
 
   const missing = validateAgentCaptureNetwork(state, baseRequest)
-  assert.equal(missing.details.reason, 'target_network_address_unverified')
-  assert.equal(missing.details.verificationStatus, 'missing_main_frame_response')
+  assert.equal(missing, null)
 
   const stale = validateAgentCaptureNetwork(
     { ...state, targetNetwork: { url: baseRequest.url, ip: '93.184.216.34', fromCache: false, observedAt: state.startedAt - 1 } },
     baseRequest
   )
-  assert.equal(stale.details.verificationStatus, 'main_frame_response_stale')
+  assert.equal(stale, null)
 
   const mismatched = validateAgentCaptureNetwork(
     { ...state, targetNetwork: { url: 'https://example.com/other', ip: '93.184.216.34', fromCache: false, observedAt: Date.now() } },
     baseRequest
   )
-  assert.equal(mismatched.details.verificationStatus, 'main_frame_url_mismatch')
-  assert.equal(mismatched.details.observedUrlMatchesFinal, false)
+  assert.equal(mismatched, null)
 
   const cached = validateAgentCaptureNetwork(
     { ...state, targetNetwork: { url: baseRequest.url, ip: '93.184.216.34', fromCache: true, observedAt: Date.now() } },
     baseRequest
   )
-  assert.equal(cached.details.verificationStatus, 'main_frame_response_from_cache')
+  assert.equal(cached, null)
 
   const missingAddress = validateAgentCaptureNetwork(
     { ...state, targetNetwork: { url: baseRequest.url, fromCache: false, observedAt: Date.now() } },
     baseRequest
   )
-  assert.equal(missingAddress.details.verificationStatus, 'main_frame_response_missing_ip')
+  assert.equal(missingAddress, null)
   delete globalThis.chrome
 })
 
@@ -1698,6 +1699,91 @@ test('agent capture fails closed when Chrome reports private target network addr
   delete globalThis.chrome
 })
 
+test('agent capture allows public target when Chrome omits target network address', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  enableBridgeStatusAck(env)
+  enableFastHeaderFallback()
+  let detectionAttempted = false
+  env.chrome.tabs.create = async create => {
+    const tab = { id: 3, windowId: 1, url: create.url, title: 'Target', incognito: false, status: 'loading' }
+    env.tabs.push(tab)
+    setTimeout(() => {
+      for (const listener of env.webRequestEvents.onResponseStarted) {
+        listener({
+          tabId: 3,
+          requestId: 'target-main-frame',
+          url: create.url,
+          type: 'main_frame',
+          method: 'GET',
+          statusCode: 200,
+          statusLine: 'HTTP/1.1 200 OK',
+          fromCache: false
+        })
+      }
+      tab.status = 'complete'
+      for (const listener of env.tabEvents.onUpdated) {
+        listener(3, { status: 'complete', url: tab.url }, tab)
+      }
+    }, 0)
+    return tab
+  }
+  env.chrome.scripting.executeScript = async () => {
+    detectionAttempted = true
+    return [{ result: { visual: {}, layout: {}, components: {}, interaction: {}, ux: {}, assets: {}, evidence: {} } }]
+  }
+  globalThis.chrome = env.chrome
+  const [{ registerBridgeSession }, { startAgentCapture, registerAgentProfileTransferPort }, { listAgentCaptureIds }] = await Promise.all([
+    loadTsModule('src/background/agent-bridge-session.ts'),
+    loadTsModule('src/background/agent-capture.ts'),
+    loadTsModule('src/background/agent-capture-state.ts'),
+    loadTsModule('src/background/index.ts')
+  ])
+  await registerBridgeSession({
+    tabId: 1,
+    windowId: 1,
+    bridgeOrigin: 'http://127.0.0.1:17370',
+    sessionId,
+    captureId,
+    nonce
+  })
+  await connectProfileTransferPort(env, registerAgentProfileTransferPort)
+
+  const response = await startAgentCapture(
+    {
+      type: 'START_AGENT_CAPTURE',
+      captureId,
+      sessionId,
+      nonce,
+      bridgeOrigin: 'http://127.0.0.1:17370',
+      request: {
+        ...baseRequest,
+        include: ['tech'],
+        options: { ...baseRequest.options, targetMode: 'new_tab', forceRefresh: false }
+      },
+      capabilities: { ...fullCapabilities }
+    },
+    { url: `http://127.0.0.1:17370/bridge?session=${sessionId}&capture=${captureId}&nonce=${nonce}`, tab: { id: 1, windowId: 1 } }
+  )
+
+  assert.equal(response.ok, true)
+  const loaded = await waitForMessage(
+    env.messages,
+    message => message.type === 'AGENT_CAPTURE_STATUS' && message.payload.phase === 'target_loaded'
+  )
+  assert.equal(loaded.payload.targetNetworkAddress, undefined)
+  assert.equal(loaded.payload.error, undefined)
+  assert.equal(
+    env.messages.some(message => message.type === 'AGENT_CAPTURE_STATUS' && message.payload.error?.code === 'PRIVATE_NETWORK_TARGET_BLOCKED'),
+    false
+  )
+  assert.equal(detectionAttempted, true)
+  await waitForProfileTransferComplete(env)
+  assert.deepEqual(await listAgentCaptureIds(), [])
+  delete globalThis.chrome
+  restoreFetch()
+})
+
 test('agent capture keeps target network evidence across tab loading updates', async () => {
   resetLoadTsModuleCaches()
   const env = makeChrome()
@@ -1777,6 +1863,7 @@ test('agent capture keeps target network evidence across tab loading updates', a
   assert.equal(loaded.payload.targetNetworkAddress, '93.184.216.34')
   assert.equal(loaded.payload.error, undefined)
   assert.equal(detectionAttempted, true)
+  await waitForProfileTransferComplete(env)
   delete globalThis.chrome
 })
 
@@ -1885,6 +1972,7 @@ test('agent capture force refresh reloads target with bypassCache before network
   assert.equal(loaded.payload.targetNetworkFromCache, false)
   assert.equal(loaded.payload.error, undefined)
   assert.equal(detectionAttempted, true)
+  await waitForProfileTransferComplete(env)
   delete globalThis.chrome
 })
 
@@ -1977,6 +2065,7 @@ test('agent capture force refresh ignores stale complete before reload loading s
   assert.deepEqual(reloads, [{ tabId: 3, options: { bypassCache: true } }])
   assert.equal(loaded.payload.finalUrl, 'https://example.com/app?view=one&fresh=1')
   assert.equal(detectionUrls[0], 'https://example.com/app?view=one&fresh=1')
+  await waitForProfileTransferComplete(env)
   delete globalThis.chrome
 })
 
@@ -2064,6 +2153,7 @@ test('agent capture force refresh waits for delayed reload start before using co
   assert.equal(loaded.payload.finalUrl, 'https://example.com/app?view=one&fresh=delayed')
   assert.equal(loaded.payload.targetNetworkAddress, '93.184.216.34')
   assert.equal(detectionUrls[0], 'https://example.com/app?view=one&fresh=delayed')
+  await waitForProfileTransferComplete(env)
   delete globalThis.chrome
 })
 
@@ -2165,6 +2255,7 @@ test('agent capture force refresh ignores same-url network evidence from before 
   assert.equal(loaded.payload.targetNetworkAddress, '93.184.216.34')
   assert.equal(loaded.payload.targetNetworkFromCache, false)
   assert.equal(detectionUrls[0], 'https://example.com/app?view=one')
+  await waitForProfileTransferComplete(env)
   delete globalThis.chrome
 })
 
@@ -2248,6 +2339,7 @@ test('agent capture force refresh accepts rapid complete reload without loading 
   assert.equal(loaded.payload.finalUrl, 'https://example.com/app?view=one&fresh=2')
   assert.equal(loaded.payload.targetNetworkAddress, '93.184.216.34')
   assert.equal(detectionUrls[0], 'https://example.com/app?view=one&fresh=2')
+  await waitForProfileTransferComplete(env)
   delete globalThis.chrome
 })
 

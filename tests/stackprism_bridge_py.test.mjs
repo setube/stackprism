@@ -2438,26 +2438,32 @@ test('python fallback rejects private final URLs before profile creation', async
 test('python fallback rejects private browser-observed target addresses', async () => {
   const { child, ready } = await startPythonBridge()
   try {
-    const created = await createCapture(ready)
-    const config = await loadBridgeConfig(created.body.bridgeUrl)
-    const status = await readJson(
-      await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/status`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${config.bridgeToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          statusBody(created.body.id, config, {
-            status: 'running',
-            phase: 'target_loaded',
-            sequence: 1,
-            finalUrl: request.url,
-            targetNetworkAddress: '127.0.0.1'
-          })
-        )
-      })
-    )
-    assert.equal(status.status, 409)
-    assert.equal(status.body.error.code, 'FINAL_URL_BLOCKED')
-    assert.equal(status.body.error.details.reason, 'private_network_address')
+    for (const [label, extra] of [
+      ['direct private address', {}],
+      ['cached private address', { targetNetworkFromCache: true }]
+    ]) {
+      const created = await createCapture(ready)
+      const config = await loadBridgeConfig(created.body.bridgeUrl)
+      const status = await readJson(
+        await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/status`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${config.bridgeToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            statusBody(created.body.id, config, {
+              status: 'running',
+              phase: 'target_loaded',
+              sequence: 1,
+              finalUrl: request.url,
+              targetNetworkAddress: '127.0.0.1',
+              ...extra
+            })
+          )
+        })
+      )
+      assert.equal(status.status, 409, label)
+      assert.equal(status.body.error.code, 'FINAL_URL_BLOCKED', label)
+      assert.equal(status.body.error.details.reason, 'private_network_address', label)
+    }
   } finally {
     child.kill('SIGTERM')
     await once(child, 'exit')
@@ -2489,6 +2495,39 @@ test('python fallback accepts proxy-reserved browser-observed addresses for publ
   } finally {
     child.kill('SIGTERM')
     await once(child, 'exit')
+  }
+})
+
+test('python fallback accepts public final URLs when browser network address is unavailable', async () => {
+  for (const [label, extra] of [
+    ['missing address', {}],
+    ['cached response', { targetNetworkFromCache: true }]
+  ]) {
+    const { child, ready } = await startPythonBridge()
+    try {
+      const created = await createCapture(ready)
+      const config = await loadBridgeConfig(created.body.bridgeUrl)
+      const status = await readJson(
+        await fetch(`${ready.baseUrl}/v1/captures/${created.body.id}/status`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${config.bridgeToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            statusBody(created.body.id, config, {
+              status: 'running',
+              phase: 'target_loaded',
+              sequence: 1,
+              finalUrl: request.url,
+              ...extra
+            })
+          )
+        })
+      )
+      assert.equal(status.status, 200, label)
+      assert.equal(status.body.phase, 'target_loaded', label)
+    } finally {
+      child.kill('SIGTERM')
+      await once(child, 'exit')
+    }
   }
 })
 

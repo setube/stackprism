@@ -10,28 +10,14 @@ const invalidNetworkAddress = () => ({
 
 const normalizeNetworkAddress = value => value.trim().replace(/^\[|\]$/g, '')
 
-export const validateTargetNetworkAddress = (value, request, { finalUrl, fromCache = false } = {}) => {
+export const validateTargetNetworkAddress = (value, request, { finalUrl } = {}) => {
   if (request.options?.allowPrivateNetworkTarget === true) {
     return { ok: true }
   }
-  if (fromCache === true || value === undefined || value === null) {
-    return {
-      ok: false,
-      code: 'FINAL_URL_BLOCKED',
-      message: 'Final URL is blocked by target policy.',
-      details: { reason: 'target_network_address_unverified' }
-    }
-  }
+  if (value === undefined || value === null) return { ok: true }
   if (typeof value !== 'string') return invalidNetworkAddress()
   const address = normalizeNetworkAddress(value)
-  if (!address) {
-    return {
-      ok: false,
-      code: 'FINAL_URL_BLOCKED',
-      message: 'Final URL is blocked by target policy.',
-      details: { reason: 'target_network_address_unverified' }
-    }
-  }
+  if (!address) return { ok: true }
   if (net.isIP(address) === 0) return invalidNetworkAddress()
   if (!isPrivateIpLiteral(address)) return { ok: true }
   try {

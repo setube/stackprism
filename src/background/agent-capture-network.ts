@@ -102,55 +102,6 @@ const isCurrentNetworkEvidence = (state: AgentCaptureState): boolean => {
   return Boolean(finalUrl && isFreshNetworkEvidence(state, state.targetNetwork) && normalizeComparableUrl(state.targetNetwork?.url) === finalUrl)
 }
 
-const networkEvidenceDiagnostics = (state: AgentCaptureState): Record<string, unknown> => {
-  const observedUrlMatchesFinal = isCurrentNetworkEvidence(state)
-  const targetNetwork = state.targetNetwork
-  if (!targetNetwork) {
-    return {
-      reason: 'target_network_address_unverified',
-      verificationStatus: 'missing_main_frame_response',
-      observedUrlMatchesFinal: false
-    }
-  }
-  if (!observedUrlMatchesFinal) {
-    if (normalizeComparableUrl(targetNetwork.url) === normalizeComparableUrl(state.finalUrl) && !isFreshNetworkEvidence(state, targetNetwork)) {
-      return {
-        reason: 'target_network_address_unverified',
-        verificationStatus:
-          typeof state.targetNetworkObservedAfter === 'number'
-            ? 'main_frame_response_before_required_refresh'
-            : 'main_frame_response_stale',
-        observedUrlMatchesFinal: true,
-        targetNetworkFromCache: targetNetwork.fromCache === true,
-        targetNetworkIpPresent: Boolean(targetNetwork.ip)
-      }
-    }
-    return {
-      reason: 'target_network_address_unverified',
-      verificationStatus: 'main_frame_url_mismatch',
-      observedUrlMatchesFinal: false,
-      targetNetworkFromCache: targetNetwork.fromCache === true,
-      targetNetworkIpPresent: Boolean(targetNetwork.ip)
-    }
-  }
-  if (targetNetwork.fromCache) {
-    return {
-      reason: 'target_network_address_unverified',
-      verificationStatus: 'main_frame_response_from_cache',
-      observedUrlMatchesFinal: true,
-      targetNetworkFromCache: true,
-      targetNetworkIpPresent: Boolean(targetNetwork.ip)
-    }
-  }
-  return {
-    reason: 'target_network_address_unverified',
-    verificationStatus: 'main_frame_response_missing_ip',
-    observedUrlMatchesFinal: true,
-    targetNetworkFromCache: false,
-    targetNetworkIpPresent: false
-  }
-}
-
 const isIpLiteral = (value: string): boolean => {
   const host = value.replace(/^\[|\]$/g, '')
   return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(':')
@@ -203,13 +154,8 @@ export const validateAgentCaptureNetwork = (
 ): AgentBridgeError | null => {
   if (request.options.allowPrivateNetworkTarget || policy.allowAllNetworkTargets) return null
   if (!isNetworkObserverActive()) return null
-  if (!isCurrentNetworkEvidence(state)) {
-    return networkBlockedError(networkEvidenceDiagnostics(state))
-  }
-  const targetNetwork = state.targetNetwork
-  if (!targetNetwork || targetNetwork.fromCache || !targetNetwork.ip) {
-    return networkBlockedError(networkEvidenceDiagnostics(state))
-  }
+  const targetNetwork = isCurrentNetworkEvidence(state) ? state.targetNetwork : undefined
+  if (!targetNetwork?.ip) return null
   if (isPrivateNetworkAddress(targetNetwork.ip) && !canUseProxyReservedAddress(state, targetNetwork.ip)) {
     return networkBlockedError({ reason: 'private_network_address', address: targetNetwork.ip })
   }

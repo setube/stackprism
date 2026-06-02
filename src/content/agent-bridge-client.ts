@@ -128,6 +128,13 @@ const sendRuntimeMessage = (message: AgentBridgeRuntimeMessage): Promise<any> =>
     chrome.runtime.sendMessage(message, response => resolve(response))
   })
 
+const isStatusMessageForContext = (context: BridgePageContext, message: AgentBridgeRuntimeMessage): boolean =>
+  message.type === 'AGENT_CAPTURE_STATUS' &&
+  message.payload?.captureId === context.captureId &&
+  message.payload.sessionId === context.sessionId &&
+  message.payload.nonce === context.nonce &&
+  message.payload.protocolVersion === bridgeProtocolVersion
+
 const isIncognitoExtensionContext = (): boolean =>
   (chrome as { extension?: { inIncognitoContext?: boolean } }).extension?.inIncognitoContext === true
 
@@ -153,11 +160,16 @@ const startControlPolling = (context: BridgePageContext) => {
 }
 
 const registerCaptureStatusListener = (
+  context: BridgePageContext,
   postStatus: (status: AgentCaptureStatus, phase?: string, error?: AgentBridgeError, extra?: Record<string, unknown>) => Promise<void>,
   stopControlPolling: () => void
 ) => {
   chrome.runtime.onMessage.addListener((message: AgentBridgeRuntimeMessage, _sender, sendResponse) => {
     if (message?.type !== 'AGENT_CAPTURE_STATUS') return false
+    if (!isStatusMessageForContext(context, message)) {
+      sendResponse({ ok: false, error: makeError('BRIDGE_REQUEST_MISMATCH', 'Agent capture status context mismatch.') })
+      return false
+    }
     if (TERMINAL_STATUSES.has(message.payload.status)) stopControlPolling()
     postStatus(message.payload.status, message.payload.phase, message.payload.error, {
       finalUrl: message.payload.finalUrl,
@@ -232,7 +244,7 @@ const runAgentBridgeClient = async () => {
       return
     }
 
-    registerCaptureStatusListener(postTrackedStatus, () => stopControlPolling())
+    registerCaptureStatusListener(context, postTrackedStatus, () => stopControlPolling())
     const requestEnvelope = await requestJson(context, `/v1/captures/${context.captureId}/request`)
     const request = validateCaptureRequestEnvelope(context, requestEnvelope)
     await postTrackedStatus('waiting_extension', 'request_loaded')

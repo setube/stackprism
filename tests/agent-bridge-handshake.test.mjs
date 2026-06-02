@@ -504,6 +504,159 @@ test('bridge client reports missing hello capabilities before starting capture',
   }
 })
 
+test('bridge client ignores capture status messages bound to another capture', async () => {
+  const originalWindow = globalThis.window
+  const originalDocument = globalThis.document
+  const originalChrome = globalThis.chrome
+  const originalLocation = globalThis.location
+  const originalFetch = globalThis.fetch
+  const { resetLoadTsModuleCaches, loadTsModule: freshLoadTsModule } = await import('./helpers/load-ts-module.mjs')
+  resetLoadTsModuleCaches()
+
+  const statusPosts = []
+  const runtimeMessages = []
+  const responses = []
+  let statusListener = null
+  let clearIntervalCalls = 0
+  globalThis.location = new URL(bridgeUrl)
+  globalThis.window = {
+    addEventListener: () => {},
+    setInterval: () => 41,
+    clearInterval: () => {
+      clearIntervalCalls += 1
+    }
+  }
+  globalThis.document = {
+    querySelector: selector => {
+      if (selector === 'meta[name="stackprism-agent-bridge"][content="1"]') return {}
+      if (selector === '#stackprism-agent-bridge-config[type="application/json"]') {
+        return { textContent: JSON.stringify({ captureId, sessionId, nonce, bridgeToken, protocolVersion: 1 }) }
+      }
+      return null
+    },
+    documentElement: { dataset: {} }
+  }
+  globalThis.fetch = async (url, init = {}) => {
+    const requestUrl = String(url)
+    if (requestUrl === `http://127.0.0.1:17370/v1/captures/${captureId}/request`) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ captureId, sessionId, nonce, protocolVersion: 1, request: makeCaptureRequest() })
+      }
+    }
+    if (requestUrl === `http://127.0.0.1:17370/v1/captures/${captureId}/status`) {
+      statusPosts.push(JSON.parse(String(init.body || '{}')))
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true })
+      }
+    }
+    throw new Error(`Unexpected bridge HTTP request: ${requestUrl}`)
+  }
+  globalThis.chrome = {
+    runtime: {
+      onMessage: {
+        addListener: listener => {
+          statusListener = listener
+        }
+      },
+      sendMessage: (message, callback) => {
+        runtimeMessages.push(message)
+        if (message.type === 'AGENT_BRIDGE_HELLO') {
+          callback?.({
+            ok: true,
+            data: {
+              extensionVersion: '1.3.71',
+              protocolVersion: 1,
+              capabilities: {
+                agentBridge: true,
+                siteExperienceProfileV1: true,
+                profileChunkTransport: true,
+                bridgeContentPost: true,
+                storageSession: true,
+                experienceProfiler: true,
+                rawProfile: true,
+                viewportMetadata: true,
+                visualScreenshot: true
+              }
+            }
+          })
+          return
+        }
+        callback?.({ ok: true, data: null })
+      },
+      connect: () => ({
+        postMessage: () => {},
+        onMessage: { addListener: () => {} },
+        onDisconnect: { addListener: () => {} }
+      })
+    }
+  }
+
+  try {
+    await freshLoadTsModule('src/content/agent-bridge-client.ts')
+    await waitForCondition(() => statusPosts.length === 2 && runtimeMessages.length === 2, 'bridge client startup')
+
+    const mismatchedHandled = statusListener(
+      {
+        type: 'AGENT_CAPTURE_STATUS',
+        payload: {
+          captureId: identifiers.captureId.valid[1],
+          sessionId,
+          nonce,
+          protocolVersion: 1,
+          status: 'failed',
+          phase: 'cleanup'
+        }
+      },
+      {},
+      response => responses.push(response)
+    )
+
+    assert.equal(mismatchedHandled, false)
+    assert.equal(statusPosts.length, 2)
+    assert.equal(clearIntervalCalls, 0)
+    assert.equal(responses.at(-1).ok, false)
+    assert.equal(responses.at(-1).error.code, 'BRIDGE_REQUEST_MISMATCH')
+
+    const matchedHandled = statusListener(
+      {
+        type: 'AGENT_CAPTURE_STATUS',
+        payload: {
+          captureId,
+          sessionId,
+          nonce,
+          protocolVersion: 1,
+          status: 'running',
+          phase: 'target_loaded',
+          finalUrl: 'https://example.com/'
+        }
+      },
+      {},
+      response => responses.push(response)
+    )
+    assert.equal(matchedHandled, true)
+    await waitForCondition(() => statusPosts.length === 3 && responses.at(-1)?.ok === true, 'matching status forward')
+    assert.equal(statusPosts[2].captureId, captureId)
+    assert.equal(statusPosts[2].phase, 'target_loaded')
+    assert.equal(statusPosts[2].finalUrl, 'https://example.com/')
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+    if (originalChrome === undefined) delete globalThis.chrome
+    else globalThis.chrome = originalChrome
+    if (originalLocation === undefined) delete globalThis.location
+    else globalThis.location = originalLocation
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+    resetLoadTsModuleCaches()
+  }
+})
+
 test('bridge client exits on non-bridge loopback pages without side effects', async () => {
   const originalWindow = globalThis.window
   const originalDocument = globalThis.document

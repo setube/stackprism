@@ -258,13 +258,13 @@ def validate_final_url(value, bridge_origin, request):
 def validate_target_network_address(value, request, from_cache=False, final_url=None):
     if request.get("options", {}).get("allowPrivateNetworkTarget") is True:
         return None, None
-    if from_cache or value is None:
-        return "FINAL_URL_BLOCKED", {"reason": "target_network_address_unverified"}
+    if value is None:
+        return None, None
     if not isinstance(value, str):
         return "INVALID_REQUEST", {"reason": "invalid_network_address"}
     address = value.strip().strip("[]")
     if not address:
-        return "FINAL_URL_BLOCKED", {"reason": "target_network_address_unverified"}
+        return None, None
     try:
         ipaddress.ip_address(address)
     except ValueError:

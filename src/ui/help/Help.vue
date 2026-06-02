@@ -486,7 +486,7 @@ examplepay-sdk</pre
     font-size: 24px;
     font-weight: 600;
     gap: 10px;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
     line-height: 1.2;
     margin-bottom: 8px;
   }
@@ -495,7 +495,7 @@ examplepay-sdk</pre
     color: var(--text);
     font-size: 16px;
     font-weight: 600;
-    letter-spacing: -0.005em;
+    letter-spacing: 0;
     margin-bottom: 12px;
   }
 
