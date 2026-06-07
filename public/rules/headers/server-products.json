@@ -161,6 +161,42 @@
           {
             "name": "OpenSwoole",
             "patterns": ["openswoole|open\\s*swoole"]
+          },
+          {
+            "name": "WEBrick",
+            "patterns": ["\\bwebrick\\b"]
+          },
+          {
+            "name": "Python http.server",
+            "patterns": ["basehttp|python.*http\\.server"]
+          },
+          {
+            "name": "GoAhead WebServer",
+            "patterns": ["goahead[-\\s]?webs?"]
+          },
+          {
+            "name": "lighttpd",
+            "patterns": ["\\blighttpd\\b"]
+          },
+          {
+            "name": "Payara Server",
+            "patterns": ["\\bpayara\\b"]
+          },
+          {
+            "name": "IBM HTTP Server",
+            "patterns": ["ibm[_-]http[_-]server|\\bihs\\b"]
+          },
+          {
+            "name": "Sinopia",
+            "patterns": ["\\bsinopia\\b"]
+          },
+          {
+            "name": "NodeBB",
+            "patterns": ["\\bnodebb\\b"]
+          },
+          {
+            "name": "RESTHeart",
+            "patterns": ["\\brestheart\\b"]
           }
         ]
       },

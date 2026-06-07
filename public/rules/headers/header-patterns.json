@@ -139,6 +139,84 @@
         ]
       },
       {
+        "defaults": {
+          "category": "数据基础设施",
+          "confidence": "高"
+        },
+        "rules": [
+          {
+            "name": "Elasticsearch Kibana",
+            "patterns": [
+              "(?:^|\\n)kbn-name:",
+              "(?:^|\\n)kbn-version:",
+              "(?:^|\\n)x-app-name:\\s*kibana"
+            ],
+            "evidence": "响应头包含 Kibana 专属标识"
+          },
+          {
+            "name": "Grafana",
+            "patterns": [
+              "(?:^|\\n)set-cookie:[^\\n]*(?:^|[;,\\s])grafana_sess(?:=|[,;\\s]|$)"
+            ],
+            "evidence": "Set-Cookie 包含 Grafana 会话标识"
+          }
+        ]
+      },
+      {
+        "defaults": {
+          "category": "DevOps / 研发效能",
+          "confidence": "高"
+        },
+        "rules": [
+          {
+            "name": "Jenkins",
+            "patterns": [
+              "(?:^|\\n)x-hudson:",
+              "(?:^|\\n)x-hudson-cli-port:"
+            ],
+            "evidence": "响应头包含 Hudson / Jenkins 专属标识"
+          },
+          {
+            "name": "SonarQube",
+            "patterns": [
+              "(?:^|\\n)set-cookie:[^\\n]*(?:^|[;,\\s])_sonar_session(?:=|[,;\\s]|$)"
+            ],
+            "evidence": "Set-Cookie 包含 SonarQube 会话标识"
+          }
+        ]
+      },
+      {
+        "defaults": {
+          "category": "后端 / 服务器框架"
+        },
+        "rules": [
+          {
+            "name": "Sinatra",
+            "confidence": "中",
+            "patterns": [
+              "(?:^|\\n)x-cascade:\\s*pass",
+              "__sinatra__"
+            ],
+            "evidence": "响应头或资源路径包含 Sinatra 框架线索"
+          },
+          {
+            "name": "Perl Mojolicious",
+            "confidence": "中",
+            "patterns": [
+              "(?:^|\\n)x-powered-by:[^\\n]*mojolicious"
+            ],
+            "evidence": "X-Powered-By 包含 Mojolicious 框架标识"
+          }
+        ]
+      },
+      {
+        "category": "CMS / 电商平台",
+        "name": "Liferay Portal",
+        "confidence": "高",
+        "patterns": ["(?:^|\\n)liferay-portal:"],
+        "evidence": "响应头包含 Liferay Portal 专属标识"
+      },
+      {
         "category": "CMS / 电商平台",
         "name": "Drupal",
         "confidence": "高",

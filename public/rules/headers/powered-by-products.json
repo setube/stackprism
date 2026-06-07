@@ -317,6 +317,30 @@
             "name": "Rust",
             "confidence": "中",
             "patterns": ["\\brust\\b|rustlang"]
+          },
+          {
+            "name": "Sinopia",
+            "patterns": ["\\bsinopia\\b"]
+          },
+          {
+            "name": "NodeBB",
+            "patterns": ["\\bnodebb\\b"]
+          },
+          {
+            "name": "RESTHeart",
+            "patterns": ["\\brestheart\\b"]
+          },
+          {
+            "name": "Payara Server",
+            "patterns": ["\\bpayara\\b"]
+          },
+          {
+            "name": "Servlet",
+            "patterns": ["\\bservlet\\b"]
+          },
+          {
+            "name": "JSP",
+            "patterns": ["\\bjsp\\b"]
           }
         ]
       }

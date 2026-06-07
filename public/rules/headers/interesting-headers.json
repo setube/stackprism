@@ -69,7 +69,14 @@
       "x-iinfo",
       "x-px",
       "x-hwcdn-cache",
-      "x-hwcdn-request-id"
+      "x-hwcdn-request-id",
+      "kbn-name",
+      "kbn-version",
+      "liferay-portal",
+      "x-hudson",
+      "x-hudson-cli-port",
+      "x-app-name",
+      "x-cascade"
     ]
   }
 }
