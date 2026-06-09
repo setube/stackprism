@@ -4,12 +4,12 @@
 
 设置页分六块：
 
-- [识别开关](./categories.md) — 23 个分类的启停（关掉后该分类的技术不再显示在弹窗里）
-- Agent Bridge — 启用后允许本机 Agent Bridge 读取当前浏览器可观测的技术与体验摘要；可人工确认放开所有网络目标
-- [禁用指定技术](./disabled-technologies.md) — 用名字精确屏蔽某些技术（无视分类）
-- [自定义弹窗样式](./custom-css.md) — 写一段 CSS 覆盖弹窗 / 设置页样式
-- [自定义规则](./custom-rules.md) — 用表单或 JSON 添加自己的识别规则
-- [规则 JSON 导入导出](./json-export.md) — 在多浏览器 / 多设备同步规则集合
+- [识别开关](./categories.md) - 60 个分类的启停（关掉后该分类的技术不再显示在弹窗里）
+- Agent Bridge - 启用后允许本机 Agent Bridge 读取当前浏览器可观测的技术与体验摘要；可人工确认放开所有网络目标
+- [禁用指定技术](./disabled-technologies.md) - 用名字精确屏蔽某些技术（无视分类）
+- [自定义弹窗样式](./custom-css.md) - 写一段 CSS 覆盖弹窗 / 设置页样式
+- [自定义规则](./custom-rules.md) - 用表单或 JSON 添加自己的识别规则
+- [规则 JSON 导入导出](./json-export.md) - 在多浏览器 / 多设备同步规则集合
 
 ## 配置存储位置
 
