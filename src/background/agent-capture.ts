@@ -23,17 +23,27 @@ import {
   setAgentCaptureFailureHandler,
   waitForProfileTransferPort
 } from './agent-capture-transfer'
+import { loadDetectorSettings } from './detector-settings'
 import { reportCleanupFailure } from './agent-capture-failure'
 import { postCaptureStatusToBridge } from './agent-capture-status'
-import { cleanupStoredCaptureAndSession, cleanupTargetAndReport, failAgentCapture, getCaptureFailureDetails } from './agent-capture-lifecycle'
+import {
+  cleanupStoredCaptureAndSession,
+  cleanupTargetAndReport,
+  failAgentCapture,
+  getCaptureFailureDetails,
+  sanitizeFailureReason
+} from './agent-capture-lifecycle'
 import { runCapture } from './agent-capture-runner'
 import { isAgentBridgePageUrl } from '@/utils/page-support'
+import { hasAgentBridgeDataConsent } from '@/utils/firefox-data-consent'
+import { isPrivateNetworkAddress } from '@/utils/network-address-policy'
 import type { AgentBridgeError, AgentBridgeRuntimeMessage, AgentCaptureRequest, StartAgentCaptureMessage } from '@/types/agent-bridge'
 import { logBackgroundError } from './logging'
 
 export { registerAgentProfileTransferPort }
 
 let startCaptureMutation: Promise<void> = Promise.resolve()
+let startupRecoveryGate: Promise<void> | null = null
 
 type PreparedAgentCapture = { ok: true; state: AgentCaptureState; request: AgentCaptureRequest } | { ok: false; error: AgentBridgeError }
 
@@ -47,6 +57,47 @@ const navigationErrorDetails = (error?: string): Record<string, unknown> => {
 }
 
 const isSupersededNavigationError = (error?: string): boolean => String(error || '').trim() === NAVIGATION_ABORTED_ERROR
+
+const isLocalhostTarget = (hostname: string): boolean => hostname.toLowerCase().replace(/\.$/, '') === 'localhost'
+
+const isPrivateNetworkTargetAllowed = (request: AgentCaptureRequest, allowAllNetworkTargets: boolean): boolean =>
+  request.options.allowPrivateNetworkTarget === true && allowAllNetworkTargets === true
+
+const validateTargetUrlBeforeResolution = (
+  request: AgentCaptureRequest,
+  bridgeOrigin: string,
+  allowAllNetworkTargets: boolean
+): AgentBridgeError | null => {
+  const target = new URL(request.url)
+  const bridge = new URL(bridgeOrigin)
+  if (target.origin === bridge.origin) {
+    return makeAgentCaptureError('BRIDGE_SELF_TARGET_BLOCKED', 'Agent capture target cannot be the local bridge.')
+  }
+  if (request.options.allowPrivateNetworkTarget === true && allowAllNetworkTargets !== true) {
+    return makeAgentCaptureError('PRIVATE_NETWORK_TARGET_BLOCKED', 'Private network targets are disabled.', {
+      reason: 'private_target_opt_in_disabled'
+    })
+  }
+  if (!isPrivateNetworkTargetAllowed(request, allowAllNetworkTargets) && (isLocalhostTarget(target.hostname) || isPrivateNetworkAddress(target.hostname))) {
+    return makeAgentCaptureError('PRIVATE_NETWORK_TARGET_BLOCKED', 'Private network targets are disabled.', {
+      reason: 'private_target_url'
+    })
+  }
+  return null
+}
+
+const savePreparedCaptureState = async (state: AgentCaptureState): Promise<AgentBridgeError | null> => {
+  try {
+    await saveAgentCaptureState(state)
+    return null
+  } catch (error) {
+    await cleanupTargetAndReport(state)
+    await cleanupStoredCaptureAndSession(state)
+    return makeAgentCaptureError(mapCaughtErrorCode(error, 'NOT_SUPPORTED'), 'Agent capture state could not be persisted.', {
+      reason: sanitizeFailureReason(error)
+    })
+  }
+}
 
 const withStartCaptureLock = async <T>(work: () => Promise<T>): Promise<T> => {
   const previous = startCaptureMutation
@@ -65,6 +116,19 @@ const withStartCaptureLock = async <T>(work: () => Promise<T>): Promise<T> => {
   }
 }
 
+export const setAgentCaptureStartupRecoveryGate = (recovery: Promise<void>): void => {
+  const gate = recovery.catch(() => {})
+  startupRecoveryGate = gate
+  gate.finally(() => {
+    if (startupRecoveryGate === gate) startupRecoveryGate = null
+  })
+}
+
+const waitForStartupRecoveryGate = async (): Promise<void> => {
+  const gate = startupRecoveryGate
+  if (gate) await gate
+}
+
 setAgentCaptureFailureHandler(async (state, code, message, details, notifyBridge) => {
   await failAgentCapture(state, code, message, details, notifyBridge)
 })
@@ -72,6 +136,11 @@ setAgentCaptureFailureHandler(async (state, code, message, details, notifyBridge
 const loadActiveAgentCaptureStates = async (): Promise<AgentCaptureState[]> => {
   const states = await Promise.all((await listAgentCaptureIds()).map(getAgentCaptureState))
   return states.filter((state): state is AgentCaptureState => Boolean(state && nonTerminalStatuses.has(state.status)))
+}
+
+export const isActiveAgentCaptureTargetTab = async (tabId: number): Promise<boolean> => {
+  if (!Number.isInteger(tabId)) return false
+  return (await loadActiveAgentCaptureStates()).some(state => state.targetTabId === tabId)
 }
 
 const reconcileAndCleanupAgentCaptures = async (): Promise<AgentCaptureState[]> => {
@@ -134,17 +203,24 @@ export const recoverInterruptedAgentCaptures = async (): Promise<void> => {
   }
 }
 
-export const handleAgentBridgeOptInDisabled = async (): Promise<void> => {
+const failActiveAgentCapturesForBridgeDisabled = async (message: string): Promise<void> => {
   await reconcileAndCleanupAgentCaptures()
   for (const state of await loadActiveAgentCaptureStates()) {
-    await failAgentCapture(state, 'AGENT_BRIDGE_DISABLED', 'Agent Bridge was disabled in this browser profile.')
+    await failAgentCapture(state, 'AGENT_BRIDGE_DISABLED', message)
   }
 }
+
+export const handleAgentBridgeOptInDisabled = async (): Promise<void> =>
+  failActiveAgentCapturesForBridgeDisabled('Agent Bridge was disabled in this browser profile.')
+
+export const handleAgentBridgeDataConsentRemoved = async (): Promise<void> =>
+  failActiveAgentCapturesForBridgeDisabled('Agent Bridge data transfer permission was removed in this browser profile.')
 
 export const startAgentCapture = async (
   message: StartAgentCaptureMessage & Record<string, unknown>,
   sender: chrome.runtime.MessageSender
 ): Promise<AgentCaptureResponse> => {
+  await waitForStartupRecoveryGate()
   const storage = assertStorageSessionAvailable()
   if (!storage.ok) return { ok: false, error: storage.error }
   await reconcileAndCleanupAgentCaptures()
@@ -162,8 +238,17 @@ export const startAgentCapture = async (
   if (!(await loadAgentBridgeEnabled())) {
     return rejectBeforeTargetResolution(makeAgentCaptureError('AGENT_BRIDGE_DISABLED', 'Agent Bridge is disabled in this browser profile.'))
   }
+  if (!(await hasAgentBridgeDataConsent())) {
+    return rejectBeforeTargetResolution(
+      makeAgentCaptureError('AGENT_BRIDGE_DISABLED', 'Agent Bridge data transfer permission was not granted in this browser profile.')
+    )
+  }
   const requestResult = validateAgentCaptureRequest(message.request)
   if (!requestResult.ok) return rejectBeforeTargetResolution(requestResult.error)
+  const settings = await loadDetectorSettings()
+  const allowAllNetworkTargets = settings.agentBridgeAllowAllNetworkTargets === true
+  const targetUrlError = validateTargetUrlBeforeResolution(requestResult.request, session.session.bridgeOrigin, allowAllNetworkTargets)
+  if (targetUrlError) return rejectBeforeTargetResolution(targetUrlError)
 
   const prepared = await withStartCaptureLock<PreparedAgentCapture>(async () => {
     if ((await loadActiveAgentCaptureStates()).length > 0)
@@ -196,7 +281,8 @@ export const startAgentCapture = async (
       updatedAt: now,
       deadlineAt: now + CAPTURE_DEADLINE_MS
     }
-    await saveAgentCaptureState(state)
+    const saveError = await savePreparedCaptureState(state)
+    if (saveError) return { ok: false, error: saveError }
     return { ok: true, state, request: requestResult.request }
   })
   if (!prepared.ok) return rejectBeforeTargetResolution(prepared.error)

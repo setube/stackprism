@@ -3,7 +3,7 @@ import { getAgentCaptureState, removeAgentCaptureState, type AgentCaptureState }
 import { nonTerminalStatuses, runningStatuses } from './agent-capture-common'
 import { failAgentCaptureWithPoster, reportCleanupFailure } from './agent-capture-failure'
 import { postCaptureStatusToBridge } from './agent-capture-status'
-import { cleanupTarget } from './agent-capture-target'
+import { cleanupTarget, restoreOrdinaryDetectionForRetainedTarget } from './agent-capture-target'
 import { sanitizeLogDetails } from './logging'
 import type { AgentBridgeError } from '@/types/agent-bridge'
 
@@ -41,6 +41,9 @@ export const cleanupTargetAndReport = async (state: AgentCaptureState): Promise<
 export const cleanupStoredCaptureAndSession = async (state: AgentCaptureState): Promise<void> => {
   await removeAgentCaptureState(state.captureId).catch(caught => reportCleanupFailure('removeAgentCaptureState', caught))
   await clearBridgeSession(state.bridgeTabId).catch(caught => reportCleanupFailure('clearBridgeSession', caught))
+  await restoreOrdinaryDetectionForRetainedTarget(state).catch(caught =>
+    reportCleanupFailure('restoreOrdinaryDetectionForRetainedTarget', caught)
+  )
 }
 
 export const failAgentCapture = async (

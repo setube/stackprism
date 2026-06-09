@@ -86,6 +86,13 @@ const notifyTargetLoaded = async (state: AgentCaptureState, finalUrl: string): P
   })
 }
 
+const markAndNotifyPhase = async (state: AgentCaptureState, phase: AgentCaptureState['phase']): Promise<void> => {
+  state.phase = phase
+  state.updatedAt = Date.now()
+  await saveAgentCaptureState(state)
+  await postCaptureStatusToBridge(state, 'running', phase)
+}
+
 const collectTechProfileInput = async (targetTabId: number, settings: Awaited<ReturnType<typeof loadDetectorSettings>>) => {
   const [data, tab] = await Promise.all([getTabData(targetTabId), getTabSnapshot(targetTabId)])
   return buildPopupRawResult(data, settings, tab)
@@ -107,6 +114,7 @@ const collectProfileInputs = async (
   if (request.options.forceRefresh) await cleanForCapture(targetTabId)
   if (!(await shouldContinueCapture(state))) return null
   if (shouldRunTech) {
+    await markAndNotifyPhase(state, 'detecting_tech')
     try {
       await runAgentPageDetection(targetTabId, state.deadlineAt)
     } catch (caught) {
@@ -117,6 +125,7 @@ const collectProfileInputs = async (
   if (!(await shouldContinueCapture(state))) return null
   let experience = null
   if (shouldRunExperience) {
+    await markAndNotifyPhase(state, 'profiling_experience')
     try {
       experience = await collectExperienceProfileInput(targetTabId, request)
     } catch (caught) {

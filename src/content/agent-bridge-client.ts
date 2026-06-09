@@ -123,9 +123,21 @@ const laterPhase = (left: string, right: string): string => {
   return rightOrder > leftOrder ? right : left
 }
 
-const sendRuntimeMessage = (message: AgentBridgeRuntimeMessage): Promise<any> =>
-  new Promise(resolve => {
-    chrome.runtime.sendMessage(message, response => resolve(response))
+const runtimeTransportError = (code: AgentBridgeError['code']): Error & { bridgeError: AgentBridgeError } => {
+  const error = new Error(code) as Error & { bridgeError: AgentBridgeError }
+  error.bridgeError = makeError(code, 'Agent Bridge extension transport is unavailable.', { transport: 'chrome.runtime.sendMessage' })
+  return error
+}
+
+const sendRuntimeMessage = (message: AgentBridgeRuntimeMessage, failureCode: AgentBridgeError['code']): Promise<any> =>
+  new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, response => {
+      if (chrome.runtime.lastError) {
+        reject(runtimeTransportError(failureCode))
+        return
+      }
+      resolve(response)
+    })
   })
 
 const isStatusMessageForContext = (context: BridgePageContext, message: AgentBridgeRuntimeMessage): boolean =>
@@ -145,13 +157,16 @@ const startControlPolling = (context: BridgePageContext) => {
         if (TERMINAL_STATUSES.has(String(control?.status || ''))) window.clearInterval(intervalId)
         if (control?.command === 'cancel') {
           window.clearInterval(intervalId)
-          return sendRuntimeMessage({
-            type: 'AGENT_CAPTURE_CONTROL',
-            captureId: context.captureId,
-            sessionId: context.sessionId,
-            nonce: context.nonce,
-            command: 'cancel'
-          })
+          return sendRuntimeMessage(
+            {
+              type: 'AGENT_CAPTURE_CONTROL',
+              captureId: context.captureId,
+              sessionId: context.sessionId,
+              nonce: context.nonce,
+              command: 'cancel'
+            },
+            'BRIDGE_TRANSPORT_DISCONNECTED'
+          )
         }
       })
       .catch(() => {})
@@ -254,7 +269,7 @@ const runAgentBridgeClient = async () => {
       sessionId: context.sessionId,
       nonce: context.nonce,
       protocolVersion: bridgeProtocolVersion
-    })
+    }, 'EXTENSION_NOT_CONNECTED')
     if (!hello?.ok) {
       await postTrackedStatus('failed', 'request_loaded', hello?.error || makeError('INVALID_REQUEST', 'Agent bridge hello failed.'))
       return
@@ -278,7 +293,7 @@ const runAgentBridgeClient = async () => {
       bridgeOrigin: context.bridgeOrigin,
       request,
       capabilities: hello.data.capabilities
-    })
+    }, 'BRIDGE_TRANSPORT_DISCONNECTED')
     if (!startResponse?.ok) {
       await postTrackedStatus(
         'failed',

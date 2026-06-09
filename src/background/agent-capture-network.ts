@@ -97,6 +97,9 @@ export const registerAgentCaptureNetworkObserver = (onError: (tabId: number, err
 const networkBlockedError = (details: Record<string, unknown>): AgentBridgeError =>
   makeAgentCaptureError('PRIVATE_NETWORK_TARGET_BLOCKED', 'Private network targets are disabled.', details)
 
+const finalUrlBlockedError = (details: Record<string, unknown>): AgentBridgeError =>
+  makeAgentCaptureError('FINAL_URL_BLOCKED', 'Final URL blocked.', details)
+
 const isCurrentNetworkEvidence = (state: AgentCaptureState): boolean => {
   const finalUrl = normalizeComparableUrl(state.finalUrl)
   return Boolean(finalUrl && isFreshNetworkEvidence(state, state.targetNetwork) && normalizeComparableUrl(state.targetNetwork?.url) === finalUrl)
@@ -112,6 +115,17 @@ const canUseProxyReservedAddress = (state: AgentCaptureState, ip: string): boole
   try {
     const finalUrl = new URL(state.finalUrl || '')
     return !isIpLiteral(finalUrl.hostname) && !isPrivateNetworkAddress(finalUrl.hostname)
+  } catch {
+    return false
+  }
+}
+
+const isLocalhostTarget = (hostname: string): boolean => hostname.toLowerCase().replace(/\.$/, '') === 'localhost'
+
+const isPrivateFinalUrl = (state: AgentCaptureState): boolean => {
+  try {
+    const finalUrl = new URL(state.finalUrl || '')
+    return isLocalhostTarget(finalUrl.hostname) || isPrivateNetworkAddress(finalUrl.hostname)
   } catch {
     return false
   }
@@ -152,7 +166,10 @@ export const validateAgentCaptureNetwork = (
   request: AgentCaptureRequest,
   policy: AgentCaptureNetworkPolicy = {}
 ): AgentBridgeError | null => {
-  if (request.options.allowPrivateNetworkTarget || policy.allowAllNetworkTargets) return null
+  if (request.options.allowPrivateNetworkTarget && policy.allowAllNetworkTargets) return null
+  if (isPrivateFinalUrl(state)) {
+    return finalUrlBlockedError({ reason: 'private_network_address', finalUrl: state.finalUrl })
+  }
   if (!isNetworkObserverActive()) return null
   const targetNetwork = isCurrentNetworkEvidence(state) ? state.targetNetwork : undefined
   if (!targetNetwork?.ip) return null

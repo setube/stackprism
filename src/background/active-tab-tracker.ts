@@ -1,4 +1,5 @@
-import { isAgentBridgePageUrl, isDetectablePageUrl } from '@/utils/page-support'
+import { isDetectablePageUrl } from '@/utils/page-support'
+import { isAgentBridgeTab } from './agent-bridge-tabs'
 
 const ACTIVE_TAB_PREFIX = 'agent-active-tab:'
 
@@ -10,13 +11,21 @@ export interface ActiveTabRecord {
 }
 
 const keyForWindow = (windowId: number): string => `${ACTIVE_TAB_PREFIX}${windowId}`
+const clearRecordedActiveTab = async (windowId: number): Promise<void> => {
+  await chrome.storage.session.remove(keyForWindow(windowId))
+}
+
 const reportTrackerFailure = (): void => {
   console.warn('StackPrism active tab tracker failed.')
 }
 
 export const recordActiveTab = async (tab: chrome.tabs.Tab): Promise<void> => {
   if (typeof tab.id !== 'number' || typeof tab.windowId !== 'number') return
-  if (tab.incognito || isAgentBridgePageUrl(tab.url) || !isDetectablePageUrl(tab.url)) return
+  if (tab.incognito || !isDetectablePageUrl(tab.url)) {
+    if (isAgentBridgeTab(tab) || !tab.url) return
+    await clearRecordedActiveTab(tab.windowId)
+    return
+  }
   await chrome.storage.session.set({
     [keyForWindow(tab.windowId)]: {
       tabId: tab.id,
@@ -41,7 +50,8 @@ export const registerActiveTabTracker = (): void => {
     }
   })
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (changeInfo.status !== 'complete' || typeof tab.windowId !== 'number') return
+    if (changeInfo.status !== 'complete' && !changeInfo.url) return
+    if (typeof tab.windowId !== 'number') return
     try {
       const previous = await getPreviousActiveTab(tab.windowId)
       if (previous?.tabId === tabId || tab.active) await recordActiveTab(tab)

@@ -1,16 +1,19 @@
 import { getPreviousActiveTab } from './active-tab-tracker'
 import { normalizeComparableUrl } from './agent-capture-request'
 import { clearBundleLicenseTimer } from './bundle-license'
+import { clearDetectionThrottle, scheduleActivePageDetection } from './detection'
 import { clearDynamicSnapshotState } from './dynamic-snapshot'
 import { clearBadge, clearTabSession } from './tab-store'
 import type { AgentCaptureRequest } from '@/types/agent-bridge'
 import type { AgentBridgeError, AgentCaptureScreenshot } from '@/types/agent-bridge'
 import { makeAgentCaptureError } from './agent-capture-common'
 import { logBackgroundError } from './logging'
+import { isDetectablePageUrl } from '@/utils/page-support'
 
 const TARGET_LOAD_TIMEOUT_REPORTING_GRACE_MS = 5000
 const MAX_TARGET_LOAD_WAIT_MS = 60000
 const RELOAD_COMPLETE_WITHOUT_LOADING_GRACE_MS = 500
+const ORDINARY_DETECTION_RESTORE_DELAY_MS = 600
 const SCREENSHOT_QUALITY = 72
 const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 const SCREENSHOT_CAPTURE_RETRY_DELAYS_MS = [250, 750, 1500, 2500]
@@ -25,10 +28,31 @@ export const cleanForCapture = async (tabId: number): Promise<void> => {
 
 export const cleanupTarget = async (state: { targetTabId?: number; createdByCapture?: boolean; keepTabOpen?: boolean }): Promise<void> => {
   if (typeof state.targetTabId !== 'number') return
-  await cleanForCapture(state.targetTabId)
+  if (state.createdByCapture) {
+    await cleanForCapture(state.targetTabId)
+  }
   if (state.createdByCapture && !state.keepTabOpen) {
     await chrome.tabs.remove(state.targetTabId)
   }
+}
+
+export const restoreOrdinaryDetectionForRetainedTarget = async (state: {
+  targetTabId?: number
+  createdByCapture?: boolean
+  keepTabOpen?: boolean
+  phase?: string
+}): Promise<void> => {
+  const tabId = state.targetTabId
+  if (typeof tabId !== 'number' || !Number.isInteger(tabId)) return
+  if (state.createdByCapture === true) {
+    if (state.keepTabOpen !== true) return
+  } else if (state.phase === 'target_opening') {
+    return
+  }
+  const tab = await chrome.tabs.get(tabId).catch(() => null)
+  if (!tab || !isDetectablePageUrl(tab.url)) return
+  clearDetectionThrottle(tabId)
+  scheduleActivePageDetection(tabId, ORDINARY_DETECTION_RESTORE_DELAY_MS)
 }
 
 const findReusableTab = async (targetUrl: string): Promise<chrome.tabs.Tab | null> => {
@@ -61,13 +85,13 @@ const resolveActiveTargetTab = async (request: AgentCaptureRequest, bridgeWindow
   if (!active) {
     return { ok: false, error: makeAgentCaptureError('ACTIVE_TAB_UNAVAILABLE', 'Previous active tab is unavailable.') }
   }
-  if (normalizeComparableUrl(active.url) !== request.url) {
-    return { ok: false, error: makeAgentCaptureError('ACTIVE_TAB_MISMATCH', 'Previous active tab URL does not match target URL.') }
-  }
   try {
     const tab = await chrome.tabs.get(active.tabId)
     if (tab.incognito) {
       return { ok: false, error: makeAgentCaptureError('INCOGNITO_NOT_SUPPORTED', 'Incognito tabs are not supported.') }
+    }
+    if (normalizeComparableUrl(tab.url) !== request.url) {
+      return { ok: false, error: makeAgentCaptureError('ACTIVE_TAB_MISMATCH', 'Previous active tab URL does not match target URL.') }
     }
     return { ok: true, tab, createdByCapture: false }
   } catch {
@@ -105,6 +129,12 @@ export const waitForTargetTabLoaded = async (tabId: number, deadlineAt: number):
     chrome.tabs.onUpdated?.addListener?.(listener)
     chrome.tabs.onRemoved?.addListener?.(removedListener)
     timeout = setTimeout(() => finish(() => reject(new Error('TARGET_LOAD_TIMEOUT'))), timeoutMs)
+    chrome.tabs
+      .get(tabId)
+      .then(tab => {
+        if (tab.status === 'complete') finish(() => resolve(tab))
+      })
+      .catch(error => finish(() => reject(error)))
   })
 }
 
@@ -209,7 +239,19 @@ export const executeExperienceProfiler = async (
 
 type ScreenshotCaptureResult = { screenshot: AgentCaptureScreenshot | null; limitations: string[] }
 
-const dataUrlByteLength = (value: string): number => new TextEncoder().encode(value).byteLength
+const JPEG_DATA_URL_PREFIX = 'data:image/jpeg;base64,'
+
+const base64DecodedByteLength = (value: string): number | null => {
+  if (!value || value.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return null
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  return Math.floor((value.length * 3) / 4) - padding
+}
+
+const jpegDataUrlByteLength = (value: string): number | null => {
+  if (!value.startsWith(JPEG_DATA_URL_PREFIX)) return null
+  return base64DecodedByteLength(value.slice(JPEG_DATA_URL_PREFIX.length))
+}
+
 const waitForDelay = (delayMs: number): Promise<void> => new Promise(resolve => setTimeout(resolve, delayMs))
 
 const waitForTabActive = async (tabId: number): Promise<boolean> => {
@@ -252,10 +294,13 @@ export const captureVisibleViewportScreenshot = async (
     if (previousActiveTabId !== tabId) await chrome.tabs.update(tabId, { active: true })
     if (!(await waitForTabActive(tabId))) throw new Error('SCREENSHOT_TARGET_NOT_ACTIVE')
     const dataUrl = await captureVisibleTabDataUrl(windowId)
-    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/jpeg;base64,')) {
+    if (typeof dataUrl !== 'string') {
       return { screenshot: null, limitations: ['screenshot_capture_invalid'] }
     }
-    const byteLength = dataUrlByteLength(dataUrl)
+    const byteLength = jpegDataUrlByteLength(dataUrl)
+    if (byteLength === null) {
+      return { screenshot: null, limitations: ['screenshot_capture_invalid'] }
+    }
     if (byteLength > MAX_SCREENSHOT_BYTES) {
       return { screenshot: null, limitations: ['screenshot_image_too_large'] }
     }

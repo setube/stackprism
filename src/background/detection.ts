@@ -236,6 +236,7 @@ export const clearDetectionThrottle = (tabId: number) => {
 
 export const scheduleActivePageDetection = (tabId: number, delay = 600) => {
   if (typeof tabId !== 'number' || tabId < 0) return
+  if (activeDetectionTimers.has(tabId)) return
   const last = lastDetectionRunAt.get(tabId) || 0
   if (last && Date.now() - last < DETECTION_THROTTLE_MS) {
     console.log('[SP detection] schedule skipped (throttle)', tabId, 'sinceLast', Date.now() - last + 'ms')

@@ -19,21 +19,26 @@ import { isAgentBridgeRequestForTab, isAgentBridgeRequestUrl, shouldIgnoreBridge
 import { clearBridgeSession } from './agent-bridge-session'
 import { logBackgroundError, redactLogUrl } from './logging'
 import {
+  handleAgentBridgeDataConsentRemoved,
   handleAgentBridgeOptInDisabled,
   handleAgentCaptureNavigationError,
   handleAgentCaptureTabNavigation,
   handleAgentCaptureTabRemoved,
-  recoverInterruptedAgentCaptures
+  isActiveAgentCaptureTargetTab,
+  recoverInterruptedAgentCaptures,
+  setAgentCaptureStartupRecoveryGate
 } from './agent-capture'
 import { clearAgentCaptureNetworkEvidence, clearStaleAgentCaptureNetworkEvidence, registerAgentCaptureNetworkObserver } from './agent-capture-network'
 import { isDetectablePageUrl, isObservableRequestUrl } from '@/utils/page-support'
 import { clearLegacySessionKeys } from '@/utils/browser-compat'
+import { includesAgentBridgeDataConsentRemoval } from '@/utils/firefox-data-consent'
 
 registerMessageRouter()
 registerActiveTabTracker()
 
 const recoverInterruptedAgentCapturesAndLog = (): void => {
-  recoverInterruptedAgentCaptures().catch(error => logBackgroundError('recoverInterruptedAgentCaptures failed', { error }))
+  const recovery = recoverInterruptedAgentCaptures().catch(error => logBackgroundError('recoverInterruptedAgentCaptures failed', { error }))
+  setAgentCaptureStartupRecoveryGate(recovery)
 }
 
 const getUrlOrigin = (value: unknown): string => {
@@ -64,6 +69,11 @@ const handleExtensionLifecycleWake = (): void => {
 chrome.runtime.onInstalled.addListener(handleExtensionLifecycleWake)
 
 chrome.runtime.onStartup.addListener(handleExtensionLifecycleWake)
+
+chrome.permissions?.onRemoved?.addListener(permissions => {
+  if (!includesAgentBridgeDataConsentRemoval(permissions)) return
+  handleAgentBridgeDataConsentRemoved().catch(error => logBackgroundError('handleAgentBridgeDataConsentRemoved failed', { error }))
+})
 
 chrome.tabs.onRemoved.addListener(tabId => {
   handleAgentCaptureTabRemoved(tabId).catch(error => logBackgroundError('handleAgentCaptureTabRemoved failed', { tabId, error }))
@@ -117,7 +127,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete') {
     console.log('[SP detection] onUpdated complete', tabId, 'url', redactLogUrl(url))
     if (isDetectablePageUrl(url)) {
-      scheduleActivePageDetection(tabId, 600)
+      isActiveAgentCaptureTargetTab(tabId)
+        .then(isCaptureTarget => {
+          if (!isCaptureTarget) scheduleActivePageDetection(tabId, 600)
+        })
+        .catch(error => {
+          logBackgroundError('active capture target check failed', { tabId, error })
+          scheduleActivePageDetection(tabId, 600)
+        })
     } else {
       clearTabDetectionState(tabId)
     }
