@@ -17,7 +17,7 @@ if (!ENTRIES[entryName]) {
 export default defineConfig({
   publicDir: false,
   build: {
-    outDir: 'public/injected',
+    outDir: process.env.INJECTED_OUT_DIR || 'public/injected',
     emptyOutDir: false,
     minify: 'esbuild',
     target: 'chrome120',

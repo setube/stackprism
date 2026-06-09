@@ -54,10 +54,13 @@ const enforceResultLimit = (profile: any) => {
     const bytes = byteLengthOf(profile)
     if (bytes <= LIMITS.executeScriptResultBytes) {
       profile.evidence.truncation.executeScriptResult = Math.max(0, initialBytes - bytes)
+      profile.evidence.truncation.executeScriptResultOverLimit = 0
       return profile
     }
   }
-  profile.evidence.truncation.executeScriptResult = Math.max(0, byteLengthOf(profile) - LIMITS.executeScriptResultBytes)
+  const finalBytes = byteLengthOf(profile)
+  profile.evidence.truncation.executeScriptResult = Math.max(0, initialBytes - finalBytes)
+  profile.evidence.truncation.executeScriptResultOverLimit = Math.max(0, finalBytes - LIMITS.executeScriptResultBytes)
   return profile
 }
 

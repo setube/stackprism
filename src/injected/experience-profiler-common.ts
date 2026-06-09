@@ -15,6 +15,7 @@ export type Truncation = {
   cssRules: number
   resourceUrls: number
   executeScriptResult: number
+  executeScriptResultOverLimit: number
 }
 
 export const emptyTruncation = (): Truncation => ({
@@ -23,7 +24,8 @@ export const emptyTruncation = (): Truncation => ({
   textSamples: 0,
   cssRules: 0,
   resourceUrls: 0,
-  executeScriptResult: 0
+  executeScriptResult: 0,
+  executeScriptResultOverLimit: 0
 })
 
 export const cleanText = (value: unknown, limit = 140): string =>
@@ -32,7 +34,7 @@ export const cleanText = (value: unknown, limit = 140): string =>
     .replace(/\b(?:\+?\d[\d\s-]{8,}\d|\d{11,})\b/g, '[redacted]')
     .replace(/(?:[￥$€£]\s*\d+(?:\.\d+)?)/g, '[redacted]')
     .replace(
-      /\b([A-Za-z0-9_-]*(?:token|secret|session|auth|authorization|key|signature|password|pass|cookie)[A-Za-z0-9_-]*)\s*[:=]\s*[^,\s;&]+/gi,
+      /\b([A-Za-z0-9_-]*(?:token|secret|session|auth|authorization|key|signature|password|pass|cookie)[A-Za-z0-9_-]*)\s*[:=]\s*(?:Bearer\s+)?[^,\s;&]+/gi,
       '$1=[redacted]'
     )
     .replace(/\s+/g, ' ')

@@ -97,9 +97,12 @@ export const buildAssetProfile = (raw: PopupRawResult | null, experience: any, m
   }
 }
 
+const hasHeaderCoverage = (headers: unknown): boolean =>
+  Array.isArray(headers) ? headers.length > 0 : isRecord(headers) ? Object.keys(headers).length > 0 : false
+
 const buildSourceCoverage = (raw: PopupRawResult | null, experience: any) =>
   [
-    raw?.headers?.length ? 'headers' : '',
+    hasHeaderCoverage(raw?.headers) ? 'headers' : '',
     raw?.technologies?.length ? 'page' : '',
     raw?.resources ? 'bundle' : '',
     experience ? 'visual' : '',
@@ -131,7 +134,8 @@ export const buildEvidence = (
       textSamples: Number(truncation.textSamples || 0),
       componentSamples: Number(truncation.componentSamples || 0),
       cssRules: Number(truncation.cssRules || 0),
-      executeScriptResult: Number(truncation.executeScriptResult || 0)
+      executeScriptResult: Number(truncation.executeScriptResult || 0),
+      executeScriptResultOverLimit: Number(truncation.executeScriptResultOverLimit || 0)
     }
   }
 }

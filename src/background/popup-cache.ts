@@ -151,6 +151,13 @@ const addAllTechnologies = (target: any[], items: any[]) => {
   }
 }
 
+const CROSS_SITE_INFRASTRUCTURE_CATEGORIES = new Set(['CDN / 托管', 'Web 服务器', '后端 / 服务器框架'])
+
+const filterCrossSiteTechnologies = (items: any[], recordUrl: unknown, pageUrl: unknown): any[] => {
+  if (isSameSite(recordUrl, pageUrl)) return Array.isArray(items) ? items : []
+  return (items || []).filter(tech => !CROSS_SITE_INFRASTRUCTURE_CATEGORIES.has(String(tech?.category || '')))
+}
+
 const GENERIC_CDN_FALLBACK_NAMES = new Set(['自定义 / 私有 CDN', '未知 / 自定义 CDN'])
 
 export const suppressGenericCdnFallbacks = (technologies: any[]) => {
@@ -247,10 +254,10 @@ const collectRawReferenceTechnologies = (data: any) => {
   addAllTechnologies(items, data.page?.technologies)
   addAllTechnologies(items, data.main?.technologies)
   for (const api of data.apis || []) {
-    if (isSameSite(api.url, pageUrl)) addAllTechnologies(items, api.technologies)
+    addAllTechnologies(items, filterCrossSiteTechnologies(api.technologies, api.url, pageUrl))
   }
   for (const frame of data.frames || []) {
-    if (isSameSite(frame.url, pageUrl)) addAllTechnologies(items, frame.technologies)
+    addAllTechnologies(items, filterCrossSiteTechnologies(frame.technologies, frame.url, pageUrl))
   }
   addAllTechnologies(items, data.bundle?.technologies)
   return items
@@ -308,7 +315,7 @@ const suppressSelfHostTechs = (technologies: any[], pageUrl: string, suppressMap
 
 // 从所有 webRequest 记录里收集 HTTP 协议版本，比注入脚本里读 PerformanceResourceTiming.nextHopProtocol
 // 可靠得多——跨域资源没有 Timing-Allow-Origin 时浏览器把 nextHopProtocol 置空，而 statusLine 是请求发起时浏览器自己写的
-const collectHttpProtocolTechs = (data: any): any[] => {
+const collectHttpProtocolTechs = (data: any, pageUrl: string): any[] => {
   const protocols = new Set<string>()
   const sampleByProto = new Map<string, string>()
   const consume = (record: any) => {
@@ -318,8 +325,12 @@ const collectHttpProtocolTechs = (data: any): any[] => {
     if (!sampleByProto.has(proto)) sampleByProto.set(proto, String(record?.url || ''))
   }
   consume(data?.main)
-  for (const api of data?.apis || []) consume(api)
-  for (const frame of data?.frames || []) consume(frame)
+  for (const api of data?.apis || []) {
+    if (isSameSite(api.url, pageUrl)) consume(api)
+  }
+  for (const frame of data?.frames || []) {
+    if (isSameSite(frame.url, pageUrl)) consume(frame)
+  }
   const out: any[] = []
   const has3 = ['3', '3.0', 'h3'].some(v => protocols.has(v))
   const has2 = ['2', '2.0', 'h2', 'h2c'].some(v => protocols.has(v))
@@ -359,24 +370,22 @@ const buildDisplayTechnologies = (data: any, settings: any, suppressMap: Record<
   const pageUrl = data.page?.url || data.dynamic?.url || data.main?.url || ''
   addAllTechnologies(all, data.page?.technologies)
   addAllTechnologies(all, data.main?.technologies)
-  addAllTechnologies(all, collectHttpProtocolTechs(data))
-  // 跨可注册域的 API / iframe 响应头只代表第三方（公共 CDN、三方服务）自身的基建，
-  // 不算本站技术栈；同站子域（含前后端分离的 api.* 子域）仍计入。
+  addAllTechnologies(all, collectHttpProtocolTechs(data, pageUrl))
+  // 跨可注册域的 API / iframe 响应头只保留明确第三方服务；CDN、服务器、
+  // 后端框架等基础设施类响应头不算本站技术栈。
   for (const api of data.apis || []) {
-    if (!isSameSite(api.url, pageUrl)) continue
     addAllTechnologies(
       all,
-      (api.technologies || []).map((tech: any) => ({
+      filterCrossSiteTechnologies(api.technologies, api.url, pageUrl).map((tech: any) => ({
         ...tech,
         source: `${tech.source || '响应头'} · API`
       }))
     )
   }
   for (const frame of data.frames || []) {
-    if (!isSameSite(frame.url, pageUrl)) continue
     addAllTechnologies(
       all,
-      (frame.technologies || []).map((tech: any) => ({
+      filterCrossSiteTechnologies(frame.technologies, frame.url, pageUrl).map((tech: any) => ({
         ...tech,
         source: `${tech.source || '响应头'} · iframe`
       }))

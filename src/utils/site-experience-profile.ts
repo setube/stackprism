@@ -85,7 +85,7 @@ export const buildSiteExperienceProfile = (input: BuildSiteExperienceProfileInpu
     bridgeProtocolVersion,
     extensionCapabilities: input.capabilities
   }
-  const targetUrl = redactUrl(input.raw?.url || input.request.url)
+  const targetUrl = redactUrl(input.request.url)
   const finalUrl = redactUrl(input.finalUrl || input.raw?.url || input.request.url)
 
   return {

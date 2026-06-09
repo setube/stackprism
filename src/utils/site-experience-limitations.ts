@@ -27,6 +27,8 @@ export const buildLimitations = (request: AgentCaptureRequest, experience: any):
   if (Number(truncation.textSamples || 0) > 0) limitations.add('text_samples_truncated')
   if (Number(truncation.componentSamples || 0) > 0) limitations.add('component_samples_truncated')
   if (Number(truncation.cssRules || 0) > 0) limitations.add('css_rules_truncated')
-  if (Number(truncation.executeScriptResult || 0) > 0) limitations.add('execute_script_result_truncated')
+  if (Number(truncation.executeScriptResult || 0) > 0 || Number(truncation.executeScriptResultOverLimit || 0) > 0) {
+    limitations.add('execute_script_result_truncated')
+  }
   return [...limitations]
 }
