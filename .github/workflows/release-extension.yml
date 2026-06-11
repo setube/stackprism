@@ -11,7 +11,7 @@ on:
         required: false
         type: string
       agent_bridge_disclosure_confirmed:
-        description: 如果本版本包含 Agent Bridge，确认已更新商店隐私披露、数据用途说明、用户可见说明和 release note
+        description: 如果本版本包含 Agent Bridge，确认已更新 Chrome/Edge/Firefox 商店隐私披露、数据用途说明、用户可见说明和 release note
         required: false
         type: boolean
         default: false
@@ -168,7 +168,7 @@ jobs:
           }
 
           console.error(
-            '::error::Agent Bridge is present in dist. Confirm Chrome Web Store / Edge Add-ons privacy disclosure, user-visible data-use text, and release notes before packaging. For workflow_dispatch set agent_bridge_disclosure_confirmed=true; for release events add a checked release-note line: [x] Agent Bridge disclosure confirmed.'
+            '::error::Agent Bridge is present in dist. Confirm Chrome Web Store / Edge Add-ons / Firefox Add-ons privacy disclosure, user-visible data-use text, and release notes before packaging. For workflow_dispatch set agent_bridge_disclosure_confirmed=true; for release events add a checked release-note line: [x] Agent Bridge disclosure confirmed.'
           )
           process.exit(1)
           NODE

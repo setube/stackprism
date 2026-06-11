@@ -17,6 +17,7 @@ import { normalizeComparableUrl, validateAgentCaptureRequest } from './agent-cap
 import { CAPTURE_DEADLINE_MS, makeAgentCaptureError, mapCaughtErrorCode, nonTerminalStatuses } from './agent-capture-common'
 import type { AgentCaptureResponse } from './agent-capture-common'
 import { resolveTargetTab } from './agent-capture-target'
+import { markAgentCaptureTargetTab } from './agent-capture-target-guard'
 import {
   clearProfileTransferPort,
   registerAgentProfileTransferPort,
@@ -89,6 +90,7 @@ const validateTargetUrlBeforeResolution = (
 const savePreparedCaptureState = async (state: AgentCaptureState): Promise<AgentBridgeError | null> => {
   try {
     await saveAgentCaptureState(state)
+    markAgentCaptureTargetTab(state.targetTabId)
     return null
   } catch (error) {
     await cleanupTargetAndReport(state)
@@ -231,8 +233,13 @@ export const startAgentCapture = async (
     }
     return { ok: false, error: session.error }
   }
-  const rejectBeforeTargetResolution = async (error: AgentBridgeError): Promise<AgentCaptureResponse> => {
-    await clearBridgeSession(session.session.tabId).catch(caught => reportCleanupFailure('clearBridgeSession', caught))
+  const rejectBeforeTargetResolution = async (
+    error: AgentBridgeError,
+    options: { clearSession?: boolean } = {}
+  ): Promise<AgentCaptureResponse> => {
+    if (options.clearSession !== false) {
+      await clearBridgeSession(session.session.tabId).catch(caught => reportCleanupFailure('clearBridgeSession', caught))
+    }
     return { ok: false, error }
   }
   if (!(await loadAgentBridgeEnabled())) {
@@ -285,7 +292,7 @@ export const startAgentCapture = async (
     if (saveError) return { ok: false, error: saveError }
     return { ok: true, state, request: requestResult.request }
   })
-  if (!prepared.ok) return rejectBeforeTargetResolution(prepared.error)
+  if (!prepared.ok) return rejectBeforeTargetResolution(prepared.error, { clearSession: prepared.error.code !== 'CAPTURE_BUSY' })
   const { state, request } = prepared
   if (!(await waitForProfileTransferPort(state))) {
     await cleanupTargetAndReport(state)

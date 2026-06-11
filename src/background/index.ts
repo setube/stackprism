@@ -1,4 +1,4 @@
-import { injectContentObserverIntoOpenTabs } from './content-injector'
+import { injectAgentBridgeClient, injectContentObserverIntoOpenTabs } from './content-injector'
 import { clearBadge, clearTabSession } from './tab-store'
 import { clearDynamicSnapshotTimer, clearPendingDynamicSnapshot } from './dynamic-snapshot'
 import { buildHeaderRecord, dedupeApiRecords, mergeHeaderRecords, shouldMergeHeaderRecords } from './headers'
@@ -29,6 +29,7 @@ import {
   setAgentCaptureStartupRecoveryGate
 } from './agent-capture'
 import { clearAgentCaptureNetworkEvidence, clearStaleAgentCaptureNetworkEvidence, registerAgentCaptureNetworkObserver } from './agent-capture-network'
+import { clearAgentCaptureTargetTabGuard, isRecentlyAgentCaptureTargetTab } from './agent-capture-target-guard'
 import { isDetectablePageUrl, isObservableRequestUrl } from '@/utils/page-support'
 import { clearLegacySessionKeys } from '@/utils/browser-compat'
 import { includesAgentBridgeDataConsentRemoval } from '@/utils/firefox-data-consent'
@@ -57,6 +58,18 @@ const clearCrossOriginDynamicSnapshot = (data: any, nextUrl: string) => {
   }
 }
 
+const applySyncDetectorSettingsChange = async (syncValue: unknown): Promise<void> => {
+  let localValue: unknown = {}
+  try {
+    const local = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
+    localValue = local[SETTINGS_STORAGE_KEY]
+  } catch (error) {
+    logBackgroundError('sync settings local read failed', { areaName: 'sync', key: SETTINGS_STORAGE_KEY, error })
+  }
+  applyDetectorSettingsUpdate(syncValue, localValue)
+  await refreshAllBadges()
+}
+
 recoverInterruptedAgentCapturesAndLog()
 refreshAllBadges().catch(error => logBackgroundError('refreshAllBadges failed', { error }))
 
@@ -83,6 +96,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
   clearDynamicSnapshotTimer(tabId)
   clearPendingDynamicSnapshot(tabId)
   clearAgentCaptureNetworkEvidence(tabId)
+  clearAgentCaptureTargetTabGuard(tabId)
   clearTabSession(tabId).catch(error => logBackgroundError('clearTabSession failed', { tabId, error }))
   clearBridgeSession(tabId).catch(error => logBackgroundError('clearBridgeSession failed', { tabId, error }))
 })
@@ -106,7 +120,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       logBackgroundError('handleAgentCaptureTabNavigation failed', { tabId, error })
     )
   }
-  if (shouldIgnoreBridgeTabEvent(tab)) return
+  if (shouldIgnoreBridgeTabEvent(tab)) {
+    if (changeInfo.status === 'complete') {
+      injectAgentBridgeClient(tabId).catch(error => logBackgroundError('injectAgentBridgeClient failed', { tabId, error }))
+    }
+    return
+  }
   if (url && !isDetectablePageUrl(url)) {
     clearTabDetectionState(tabId)
     return
@@ -127,13 +146,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete') {
     console.log('[SP detection] onUpdated complete', tabId, 'url', redactLogUrl(url))
     if (isDetectablePageUrl(url)) {
+      const wasCaptureTarget = isRecentlyAgentCaptureTargetTab(tabId)
       isActiveAgentCaptureTargetTab(tabId)
         .then(isCaptureTarget => {
-          if (!isCaptureTarget) scheduleActivePageDetection(tabId, 600)
+          if (!isCaptureTarget && !wasCaptureTarget) scheduleActivePageDetection(tabId, 600)
         })
         .catch(error => {
           logBackgroundError('active capture target check failed', { tabId, error })
-          scheduleActivePageDetection(tabId, 600)
+          if (!wasCaptureTarget) scheduleActivePageDetection(tabId, 600)
         })
     } else {
       clearTabDetectionState(tabId)
@@ -165,12 +185,7 @@ chrome.webNavigation.onErrorOccurred.addListener(details => {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'sync' && changes[SETTINGS_STORAGE_KEY]) {
-    chrome.storage.local
-      .get(SETTINGS_STORAGE_KEY)
-      .then(local => {
-        applyDetectorSettingsUpdate(changes[SETTINGS_STORAGE_KEY].newValue, local[SETTINGS_STORAGE_KEY])
-        return refreshAllBadges()
-      })
+    applySyncDetectorSettingsChange(changes[SETTINGS_STORAGE_KEY].newValue)
       .catch(error => logBackgroundError('sync settings change handling failed', { areaName, key: SETTINGS_STORAGE_KEY, error }))
   }
   if (areaName === 'local' && changes[SETTINGS_STORAGE_KEY]) {

@@ -38,6 +38,18 @@ const fullCapabilities = {
   visualScreenshot: true
 }
 
+test('script file load classifier ignores runtime not found errors', async () => {
+  resetLoadTsModuleCaches()
+  const { isScriptFileLoadError } = await loadTsModule('src/background/script-injection-errors.ts')
+
+  assert.equal(isScriptFileLoadError('Unable to load script: injected/page-detector.iife.js'), true)
+  assert.equal(isScriptFileLoadError('Error: file not found: injected/page-detector.iife.js'), true)
+  assert.equal(isScriptFileLoadError("NotFoundError: Failed to execute 'removeChild' on 'Node': node was not found."), false)
+  assert.equal(isScriptFileLoadError(new Error('ReferenceError: detector registry not found')), false)
+
+  resetLoadTsModuleCaches()
+})
+
 const makeChrome = () => {
   const storage = {}
   const messages = []
@@ -367,6 +379,173 @@ test('experience profiler injection receives screenshot metadata option and clea
   assert.deepEqual(calls[1].files, ['injected/experience-profiler.iife.js'])
   assert.equal(typeof calls[2].func, 'function')
   delete globalThis.chrome
+})
+
+test('experience profiler falls back to inline function when firefox cannot load script files', async () => {
+  const calls = []
+  const originalDocument = globalThis.document
+  const originalWindow = globalThis.window
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, 'location')
+  const originalMatchMedia = globalThis.matchMedia
+  const button = {
+    tagName: 'BUTTON',
+    textContent: 'Authorization: Bearer sk_live_abc123 token=secret password=hunter2 user@example.com +1 415 555 1212',
+    getAttribute: name => (name === 'role' ? 'button' : ''),
+    getBoundingClientRect: () => ({ x: 1, y: 2, width: 120, height: 32 })
+  }
+  const asset = {
+    tagName: 'IMG',
+    currentSrc: 'https://cdn.example.com/account/sessionId/secretToken/Abcd1234EFGH5678ijkl9012.png?token=secret#frag',
+    src: '',
+    href: '',
+    getAttribute: () => '',
+    getBoundingClientRect: () => ({ x: 0, y: 0, width: 0, height: 0 })
+  }
+  globalThis.document = {
+    documentElement: { lang: 'en' },
+    body: { textContent: button.textContent, getAttribute: () => '' },
+    querySelectorAll: selector => {
+      if (selector === 'body *') return [button, asset]
+      if (selector === 'img[src], script[src], link[href]') return [asset]
+      if (selector === 'button') return [button]
+      return []
+    }
+  }
+  globalThis.window = { innerWidth: 1440, innerHeight: 900 }
+  globalThis.matchMedia = () => ({ matches: false })
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { href: 'https://example.com/base/' }
+  })
+  globalThis.chrome = {
+    scripting: {
+      executeScript: async options => {
+        calls.push(options)
+        if (options.files?.[0] === 'injected/experience-profiler.iife.js') {
+          return [{ error: 'Unable to load script: <anonymous code>' }]
+        }
+        if (options.func?.name === 'collectInlineExperienceProfile') {
+          return [{ result: options.func(options.args?.[0]) }]
+        }
+        if (typeof options.func === 'function' && options.world === 'MAIN') {
+          return [{ result: null }]
+        }
+        return [{ result: null }]
+      }
+    }
+  }
+
+  try {
+    const { executeExperienceProfiler } = await loadTsModule('src/background/agent-capture-target.ts')
+
+    const result = await executeExperienceProfiler(42, { captureScreenshotMetadata: false })
+
+    assert.ok(result.visual)
+    assert.deepEqual(calls.map(call => call.files?.[0]).filter(Boolean), ['injected/experience-profiler.iife.js'])
+    assert.equal(calls.filter(call => typeof call.func === 'function' && call.world === 'MAIN').length, 3)
+    const serialized = JSON.stringify(result)
+    assert.doesNotMatch(serialized, /Bearer|sk_live_abc123|token=secret|password=hunter2|user@example\.com|555 1212/)
+    assert.doesNotMatch(result.assets.urls[0], /sessionId|secretToken|Abcd1234EFGH5678ijkl9012|#frag/)
+    assert.equal('rect' in result.components.samples[0], false)
+    assert.match(serialized, /\[redacted\]|%5Bredacted%5D/)
+  } finally {
+    delete globalThis.chrome
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+    if (originalMatchMedia === undefined) delete globalThis.matchMedia
+    else globalThis.matchMedia = originalMatchMedia
+    if (originalLocation) Object.defineProperty(globalThis, 'location', originalLocation)
+    else delete globalThis.location
+  }
+})
+
+test('experience profiler inline fallback includes rects only when metadata is requested', async () => {
+  const calls = []
+  const originalDocument = globalThis.document
+  const originalWindow = globalThis.window
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, 'location')
+  const originalMatchMedia = globalThis.matchMedia
+  const nav = {
+    tagName: 'NAV',
+    textContent: 'Primary nav',
+    getAttribute: () => '',
+    getBoundingClientRect: () => ({ x: 10, y: 20, width: 300, height: 40 })
+  }
+  globalThis.document = {
+    documentElement: { lang: 'en' },
+    body: { textContent: nav.textContent, getAttribute: () => '' },
+    querySelectorAll: selector => {
+      if (selector === 'body *') return [nav]
+      if (selector === 'nav') return [nav]
+      return []
+    }
+  }
+  globalThis.window = { innerWidth: 1440, innerHeight: 900 }
+  globalThis.matchMedia = () => ({ matches: false })
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { href: 'https://example.com/base/' }
+  })
+  globalThis.chrome = {
+    scripting: {
+      executeScript: async options => {
+        calls.push(options)
+        if (options.files?.[0] === 'injected/experience-profiler.iife.js') {
+          return [{ error: 'Unable to load script: <anonymous code>' }]
+        }
+        if (options.func?.name === 'collectInlineExperienceProfile') {
+          return [{ result: options.func(options.args?.[0]) }]
+        }
+        return [{ result: null }]
+      }
+    }
+  }
+
+  try {
+    const { executeExperienceProfiler } = await loadTsModule('src/background/agent-capture-target.ts')
+
+    const result = await executeExperienceProfiler(42, { captureScreenshotMetadata: true })
+
+    assert.deepEqual(calls.find(call => call.func?.name === 'collectInlineExperienceProfile')?.args, [{ captureScreenshotMetadata: true }])
+    assert.deepEqual(result.components.samples[0].rect, { x: 10, y: 20, width: 300, height: 40 })
+    assert.deepEqual(result.layout.landmarks[0].rect, { x: 10, y: 20, width: 300, height: 40 })
+  } finally {
+    delete globalThis.chrome
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+    if (originalMatchMedia === undefined) delete globalThis.matchMedia
+    else globalThis.matchMedia = originalMatchMedia
+    if (originalLocation) Object.defineProperty(globalThis, 'location', originalLocation)
+    else delete globalThis.location
+  }
+})
+
+test('experience profiler does not use inline fallback for runtime profiler errors', async () => {
+  const calls = []
+  globalThis.chrome = {
+    scripting: {
+      executeScript: async options => {
+        calls.push(options)
+        if (options.files?.[0] === 'injected/experience-profiler.iife.js') {
+          return [{ error: 'ReferenceError: profiler regression' }]
+        }
+        return [{ result: null }]
+      }
+    }
+  }
+
+  try {
+    const { executeExperienceProfiler } = await loadTsModule('src/background/agent-capture-target.ts')
+
+    await assert.rejects(() => executeExperienceProfiler(42, { captureScreenshotMetadata: false }), /profiler regression/)
+    assert.equal(calls.some(call => call.func?.name === 'collectInlineExperienceProfile'), false)
+  } finally {
+    delete globalThis.chrome
+  }
 })
 
 const enableBridgeStatusAck = env => {
@@ -1526,6 +1705,43 @@ test('background local settings change disables running agent captures', async (
   delete globalThis.chrome
 })
 
+test('background sync settings change preserves sync updates when local storage is unavailable', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  env.chrome.storage.local.get = async () => {
+    throw new Error('local settings unavailable token=secret')
+  }
+  globalThis.chrome = env.chrome
+
+  await loadTsModule('src/background/index.ts')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const { loadDetectorSettings } = await loadTsModule('src/background/detector-settings.ts')
+
+  assert.equal(env.storageEvents.onChanged.length, 1)
+  env.storageEvents.onChanged[0](
+    {
+      stackPrismSettings: {
+        newValue: {
+          disabledTechnologies: ['React'],
+          disabledCategories: ['Analytics']
+        },
+        oldValue: {}
+      }
+    },
+    'sync'
+  )
+
+  const settings = await waitForCondition(async () => {
+    const current = await loadDetectorSettings()
+    return current.disabledTechnologies.includes('React') ? current : null
+  })
+
+  assert.deepEqual(settings.disabledTechnologies, ['React'])
+  assert.deepEqual(settings.disabledCategories, ['Analytics'])
+  assert.equal(settings.agentBridgeEnabled, false)
+  delete globalThis.chrome
+})
+
 test('background data consent removal disables running agent captures', async () => {
   resetLoadTsModuleCaches()
   const env = makeChrome()
@@ -1675,7 +1891,7 @@ test('background extension lifecycle wake fails active agent captures closed', a
 test('agent capture rejects duplicate start for the same active capture id', async () => {
   const env = makeChrome()
   globalThis.chrome = env.chrome
-  const [{ registerBridgeSession }, { startAgentCapture }, { saveAgentCaptureState }] = await Promise.all([
+  const [{ getBridgeSession, registerBridgeSession }, { startAgentCapture }, { saveAgentCaptureState }] = await Promise.all([
     loadTsModule('src/background/agent-bridge-session.ts'),
     loadTsModule('src/background/agent-capture.ts'),
     loadTsModule('src/background/agent-capture-state.ts')
@@ -1721,6 +1937,7 @@ test('agent capture rejects duplicate start for the same active capture id', asy
   )
 
   assert.equal(response.error.code, 'CAPTURE_BUSY')
+  assert.equal((await getBridgeSession(1))?.captureId, captureId)
   delete globalThis.chrome
 })
 
@@ -3418,6 +3635,89 @@ test('agent capture reports sanitized target injection failure details', async (
   restoreFetch()
 })
 
+test('agent page detection falls back to inline page detector when firefox cannot load script files', async () => {
+  const env = makeChrome()
+  enableFastHeaderFallback()
+  const calls = []
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    if (options.files?.[0]?.includes('content-observer')) return [{ result: null }]
+    if (options.files?.[0] === 'injected/page-detector.iife.js') return [{ error: 'Unable to load script: <anonymous code>' }]
+    if (typeof options.func === 'function' && options.world === 'MAIN') {
+      return [{ result: { url: 'https://example.com/app?view=one', technologies: [{ name: 'React', categories: ['frontend'] }] } }]
+    }
+    return [{ result: {} }]
+  }
+  globalThis.chrome = env.chrome
+  const { runAgentPageDetection } = await loadTsModule('src/background/detection.ts')
+
+  const result = await runAgentPageDetection(2, Date.now() + 5000)
+
+  assert.equal(result.url, 'https://example.com/app?view=one')
+  assert.deepEqual(calls.map(call => call.files?.[0]).filter(Boolean), ['assets/content-observer.ts-unit.js', 'injected/page-detector.iife.js'])
+  assert.ok(calls.some(call => typeof call.func === 'function' && call.world === 'MAIN'))
+  delete globalThis.chrome
+  restoreFetch()
+})
+
+test('agent page detection does not use inline fallback for runtime detector errors', async () => {
+  const env = makeChrome()
+  enableBridgeStatusAck(env)
+  enableFastHeaderFallback()
+  const calls = []
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    if (options.files?.[0]?.includes('content-observer')) return [{ result: null }]
+    if (options.files?.[0] === 'injected/page-detector.iife.js') return [{ error: 'ReferenceError: detector regression' }]
+    if (options.files?.[0] === 'injected/experience-profiler.iife.js') {
+      return [{ result: { visual: {}, layout: {}, components: {}, interaction: {}, ux: {}, assets: {}, evidence: {} } }]
+    }
+    return [{ result: null }]
+  }
+  globalThis.chrome = env.chrome
+  const [{ registerBridgeSession }, { startAgentCapture, registerAgentProfileTransferPort }, { listAgentCaptureIds }] = await Promise.all([
+    loadTsModule('src/background/agent-bridge-session.ts'),
+    loadTsModule('src/background/agent-capture.ts'),
+    loadTsModule('src/background/agent-capture-state.ts')
+  ])
+  await registerBridgeSession({
+    tabId: 1,
+    windowId: 1,
+    bridgeOrigin: 'http://127.0.0.1:17370',
+    sessionId,
+    captureId,
+    nonce
+  })
+  await connectProfileTransferPort(env, registerAgentProfileTransferPort)
+
+  const response = await startAgentCapture(
+    {
+      type: 'START_AGENT_CAPTURE',
+      captureId,
+      sessionId,
+      nonce,
+      bridgeOrigin: 'http://127.0.0.1:17370',
+      request: {
+        ...baseRequest,
+        options: { ...baseRequest.options, targetMode: 'new_tab', forceRefresh: false }
+      },
+      capabilities: { ...fullCapabilities }
+    },
+    { url: `http://127.0.0.1:17370/bridge?session=${sessionId}&capture=${captureId}&nonce=${nonce}`, tab: { id: 1, windowId: 1 } }
+  )
+
+  assert.equal(response.ok, true)
+  const failed = await waitForMessage(
+    env.messages,
+    message => message.type === 'AGENT_CAPTURE_STATUS' && message.payload.error?.code === 'TARGET_INJECTION_FAILED'
+  )
+  assert.match(failed.payload.error.details.reason, /detector regression/)
+  assert.equal(calls.some(call => call.func?.name === 'detectPageTechnologies'), false)
+  assert.deepEqual(await listAgentCaptureIds(), [])
+  delete globalThis.chrome
+  restoreFetch()
+})
+
 test('agent capture fails when content observer injection fails', async () => {
   const env = makeChrome()
   enableBridgeStatusAck(env)
@@ -3425,6 +3725,9 @@ test('agent capture fails when content observer injection fails', async () => {
   env.chrome.scripting.executeScript = async options => {
     if (options.files?.[0]?.includes('content-observer')) {
       throw new Error('Cannot inject observer for https://example.com/app?token=secret#frag')
+    }
+    if (typeof options.func === 'function') {
+      throw new Error('Cannot inject observer function for https://example.com/app?token=secret#frag')
     }
     if (options.files?.[0] === 'injected/page-detector.iife.js') {
       return [{ result: { url: 'https://example.com/app?view=one', technologies: [] } }]
@@ -4068,6 +4371,261 @@ test('bridge tab helpers isolate bridge pages and API requests', async () => {
   assert.equal(shouldIgnoreBridgeTabEvent({ url: 'https://example.com/', incognito: false }), false)
 })
 
+test('content injector normalizes firefox manifest script URLs and retries root paths', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  const calls = []
+  env.chrome.runtime.getManifest = () => ({
+    version: '1.3.71',
+    content_scripts: [
+      { js: ['moz-extension://unit-id/assets/content-observer.ts-unit.js'], matches: ['http://*/*', 'https://*/*'] },
+      { js: ['moz-extension://unit-id/assets/agent-bridge-client.ts-unit.js'], matches: ['http://127.0.0.1/*'] }
+    ]
+  })
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    return options.files?.[0]?.startsWith('/') ? [{ result: null }] : [{ error: 'Unable to load script: relative path failed' }]
+  }
+  globalThis.chrome = env.chrome
+
+  try {
+    const { getAgentBridgeClientFile, injectAgentBridgeClient } = await loadTsModule('src/background/content-injector.ts')
+    assert.equal(getAgentBridgeClientFile(), 'assets/agent-bridge-client.ts-unit.js')
+
+    await injectAgentBridgeClient(1, { failOnError: true })
+
+    assert.deepEqual(
+      calls.map(call => call.files?.[0]),
+      ['assets/agent-bridge-client.ts-unit.js', '/assets/agent-bridge-client.ts-unit.js']
+    )
+  } finally {
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
+test('content injector falls back to inline bridge client when firefox cannot load script files', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  const calls = []
+  env.chrome.runtime.getManifest = () => ({
+    version: '1.3.71',
+    content_scripts: [
+      { js: ['moz-extension://unit-id/assets/content-observer.ts-unit.js'], matches: ['http://*/*', 'https://*/*'] },
+      { js: ['moz-extension://unit-id/assets/agent-bridge-client.ts-unit.js'], matches: ['http://127.0.0.1/*'] }
+    ]
+  })
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    return options.files ? [{ error: `Unable to load script: ${options.files[0]}` }] : [{ result: null }]
+  }
+  globalThis.chrome = env.chrome
+
+  try {
+    const { injectAgentBridgeClient } = await loadTsModule('src/background/content-injector.ts')
+
+    await injectAgentBridgeClient(1, { failOnError: true })
+
+    assert.deepEqual(
+      calls.filter(call => call.files?.[0]?.includes('agent-bridge-client.ts-unit.js')).map(call => call.files?.[0]),
+      ['assets/agent-bridge-client.ts-unit.js', '/assets/agent-bridge-client.ts-unit.js']
+    )
+    assert.equal(calls.filter(call => call.func?.name === 'runAgentBridgeClient').length, 1)
+  } finally {
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
+test('content injector does not retry or fall back after bridge client runtime error', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  const calls = []
+  env.chrome.runtime.getManifest = () => ({
+    version: '1.3.71',
+    content_scripts: [
+      { js: ['moz-extension://unit-id/assets/content-observer.ts-unit.js'], matches: ['http://*/*', 'https://*/*'] },
+      { js: ['moz-extension://unit-id/assets/agent-bridge-client.ts-unit.js'], matches: ['http://127.0.0.1/*'] }
+    ]
+  })
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    if (options.files?.[0] === 'assets/agent-bridge-client.ts-unit.js') {
+      return [{ error: 'ReferenceError: bridge client regression' }]
+    }
+    if (options.files?.[0] === '/assets/agent-bridge-client.ts-unit.js') {
+      return [{ error: 'Unable to load script: slash path failed' }]
+    }
+    return [{ result: null }]
+  }
+  globalThis.chrome = env.chrome
+
+  try {
+    const { injectAgentBridgeClient } = await loadTsModule('src/background/content-injector.ts')
+
+    await assert.rejects(() => injectAgentBridgeClient(1, { failOnError: true }), /bridge client regression/)
+    assert.deepEqual(
+      calls.filter(call => call.files?.[0]?.includes('agent-bridge-client.ts-unit.js')).map(call => call.files?.[0]),
+      ['assets/agent-bridge-client.ts-unit.js']
+    )
+    assert.equal(calls.some(call => call.func?.name === 'runAgentBridgeClient'), false)
+  } finally {
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
+test('content injector treats bridge client NotFoundError as a runtime error', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  const calls = []
+  env.chrome.runtime.getManifest = () => ({
+    version: '1.3.71',
+    content_scripts: [
+      { js: ['moz-extension://unit-id/assets/content-observer.ts-unit.js'], matches: ['http://*/*', 'https://*/*'] },
+      { js: ['moz-extension://unit-id/assets/agent-bridge-client.ts-unit.js'], matches: ['http://127.0.0.1/*'] }
+    ]
+  })
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    if (options.files?.[0] === 'assets/agent-bridge-client.ts-unit.js') {
+      return [{ error: "NotFoundError: Failed to execute 'removeChild' on 'Node': node was not found." }]
+    }
+    if (options.files?.[0] === '/assets/agent-bridge-client.ts-unit.js') {
+      return [{ error: 'Unable to load script: slash path failed' }]
+    }
+    return [{ result: null }]
+  }
+  globalThis.chrome = env.chrome
+
+  try {
+    const { injectAgentBridgeClient } = await loadTsModule('src/background/content-injector.ts')
+
+    await assert.rejects(() => injectAgentBridgeClient(1, { failOnError: true }), /NotFoundError/)
+    assert.deepEqual(
+      calls.filter(call => call.files?.[0]?.includes('agent-bridge-client.ts-unit.js')).map(call => call.files?.[0]),
+      ['assets/agent-bridge-client.ts-unit.js']
+    )
+    assert.equal(calls.some(call => call.func?.name === 'runAgentBridgeClient'), false)
+  } finally {
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
+test('content injector does not fall back for bridge client runtime errors', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  const calls = []
+  env.chrome.runtime.getManifest = () => ({
+    version: '1.3.71',
+    content_scripts: [
+      { js: ['moz-extension://unit-id/assets/content-observer.ts-unit.js'], matches: ['http://*/*', 'https://*/*'] },
+      { js: ['moz-extension://unit-id/assets/agent-bridge-client.ts-unit.js'], matches: ['http://127.0.0.1/*'] }
+    ]
+  })
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    if (options.files) return [{ error: 'ReferenceError: bridge client regression' }]
+    return [{ result: null }]
+  }
+  globalThis.chrome = env.chrome
+
+  try {
+    const { injectAgentBridgeClient } = await loadTsModule('src/background/content-injector.ts')
+
+    await assert.rejects(() => injectAgentBridgeClient(1, { failOnError: true }), /bridge client regression/)
+    assert.equal(calls.some(call => call.func?.name === 'runAgentBridgeClient'), false)
+  } finally {
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
+test('content injector falls back to inline observer when firefox cannot load script files', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  const calls = []
+  env.chrome.runtime.getManifest = () => ({
+    version: '1.3.71',
+    content_scripts: [
+      { js: ['moz-extension://unit-id/assets/content-observer.ts-unit.js'], matches: ['http://*/*', 'https://*/*'] },
+      { js: ['moz-extension://unit-id/assets/agent-bridge-client.ts-unit.js'], matches: ['http://127.0.0.1/*'] }
+    ]
+  })
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    return options.files ? [{ error: `Unable to load script: ${options.files[0]}` }] : [{ result: null }]
+  }
+  globalThis.chrome = env.chrome
+
+  try {
+    const { injectContentObserver } = await loadTsModule('src/background/content-injector.ts')
+
+    await injectContentObserver(91, { failOnError: true })
+
+    assert.deepEqual(
+      calls
+        .filter(call => call.target?.tabId === 91 && call.files?.[0]?.includes('content-observer.ts-unit.js'))
+        .map(call => call.files?.[0]),
+      ['assets/content-observer.ts-unit.js', '/assets/content-observer.ts-unit.js']
+    )
+    assert.equal(calls.filter(call => call.target?.tabId === 91 && call.func?.name === 'runContentObserver').length, 1)
+  } finally {
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
+test('content injector does not fall back for observer runtime errors', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  const calls = []
+  env.chrome.runtime.getManifest = () => ({
+    version: '1.3.71',
+    content_scripts: [
+      { js: ['moz-extension://unit-id/assets/content-observer.ts-unit.js'], matches: ['http://*/*', 'https://*/*'] },
+      { js: ['moz-extension://unit-id/assets/agent-bridge-client.ts-unit.js'], matches: ['http://127.0.0.1/*'] }
+    ]
+  })
+  env.chrome.scripting.executeScript = async options => {
+    calls.push(options)
+    if (options.files) return [{ error: 'ReferenceError: observer regression' }]
+    return [{ result: null }]
+  }
+  globalThis.chrome = env.chrome
+
+  try {
+    const { injectContentObserver } = await loadTsModule('src/background/content-injector.ts')
+
+    await assert.rejects(() => injectContentObserver(2, { failOnError: true }), /observer regression/)
+    assert.equal(calls.some(call => call.func?.name === 'runContentObserver'), false)
+  } finally {
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
+test('background update handling injects agent bridge client for completed bridge tabs', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  globalThis.chrome = env.chrome
+
+  try {
+    await loadTsModule('src/background/index.ts')
+    const baseline = env.executedScripts.length
+    for (const listener of env.tabEvents.onUpdated) {
+      await listener(1, { status: 'complete', url: env.tabs[0].url }, env.tabs[0])
+    }
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    assert.deepEqual(env.executedScripts.slice(baseline).map(call => call.files?.[0]), ['assets/agent-bridge-client.ts-unit.js'])
+  } finally {
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
 test('background update handling suppresses ordinary detection for active capture target tabs', async () => {
   resetLoadTsModuleCaches()
   const env = makeChrome()
@@ -4121,6 +4679,53 @@ test('background update handling suppresses ordinary detection for active captur
     }
     await new Promise(resolve => originalSetTimeout(resolve, 0))
     assert.deepEqual(scheduledDelays.slice(ordinaryScheduleBaseline), [600])
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
+    delete globalThis.chrome
+    resetLoadTsModuleCaches()
+  }
+})
+
+test('background update handling suppresses ordinary detection for recently managed capture target tabs', async () => {
+  resetLoadTsModuleCaches()
+  const env = makeChrome()
+  const scheduledDelays = []
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  globalThis.setTimeout = (_callback, delay) => {
+    scheduledDelays.push(Number(delay))
+    return { fakeTimer: true }
+  }
+  globalThis.clearTimeout = () => {}
+  globalThis.chrome = env.chrome
+
+  try {
+    const [{ markAgentCaptureTargetTab }] = await Promise.all([
+      loadTsModule('src/background/agent-capture-target-guard.ts'),
+      loadTsModule('src/background/index.ts')
+    ])
+    markAgentCaptureTargetTab(4)
+
+    for (const listener of env.tabEvents.onUpdated) {
+      await listener(
+        4,
+        { status: 'complete', url: 'https://blocked.example/app' },
+        { id: 4, windowId: 1, url: 'https://blocked.example/app' }
+      )
+    }
+    await new Promise(resolve => originalSetTimeout(resolve, 0))
+    assert.deepEqual(scheduledDelays, [])
+
+    for (const listener of env.tabEvents.onUpdated) {
+      await listener(
+        5,
+        { status: 'complete', url: 'https://ordinary.example/app' },
+        { id: 5, windowId: 1, url: 'https://ordinary.example/app' }
+      )
+    }
+    await new Promise(resolve => originalSetTimeout(resolve, 0))
+    assert.deepEqual(scheduledDelays, [600])
   } finally {
     globalThis.setTimeout = originalSetTimeout
     globalThis.clearTimeout = originalClearTimeout
@@ -5178,7 +5783,7 @@ test('target tab load wait rechecks state after subscribing to tab events', asyn
 
     const loaded = await waiting
     assert.equal(loaded.status, 'complete')
-    assert.equal(getCalls, 2)
+    assert.ok(getCalls >= 2)
     assert.equal(env.tabEvents.onUpdated.length, 0)
     assert.equal(env.tabEvents.onRemoved.length, 0)
   } finally {

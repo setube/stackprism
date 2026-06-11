@@ -1,5 +1,5 @@
 // @ts-nocheck
-;(() => {
+export const runContentObserver = () => {
   const isStackPrismAgentBridgeUrl = () => {
     if (location.protocol !== 'http:' || location.hostname !== '127.0.0.1' || location.pathname !== '/bridge') return false
     const specs = {
@@ -711,4 +711,8 @@
     }
     stopObserver({ keepErrorGuards: true })
   }
-})()
+}
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof chrome !== 'undefined') {
+  runContentObserver()
+}

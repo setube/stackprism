@@ -1,5 +1,5 @@
 import { cpSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream } from 'node:fs'
-import { resolve, dirname } from 'node:path'
+import { basename, resolve, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import archiver from 'archiver'
@@ -12,6 +12,7 @@ export async function packageFirefox({ root = defaultRoot, logger = console } = 
   const paths = firefoxPackagePaths(root)
   copyDist(paths)
   await bundleBackground(paths, logger)
+  await bundleContentScripts(paths, logger)
   const manifest = writeFirefoxManifest(paths, logger)
   const xpiPath = await writeXpi({ root, firefoxDir: paths.firefoxDir, manifest, logger })
   return { firefoxDir: paths.firefoxDir, manifestPath: paths.manifestPath, xpiPath }
@@ -61,6 +62,57 @@ async function bundleBackground({ firefoxDir }, logger) {
   logger.log('[package-firefox] bundled background.js as IIFE')
 }
 
+async function bundleContentScripts({ firefoxDir, manifestPath }, logger) {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const contentScripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : []
+  const rewritten = new Map()
+
+  for (const script of contentScripts) {
+    if (!Array.isArray(script.js)) continue
+    script.js = await Promise.all(script.js.map(file => bundleContentScriptFile({ firefoxDir, file, rewritten })))
+  }
+
+  if (!rewritten.size) return
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
+  logger.log(`[package-firefox] bundled ${rewritten.size} content script loader(s) as Firefox IIFE files`)
+}
+
+async function bundleContentScriptFile({ firefoxDir, file, rewritten }) {
+  if (rewritten.has(file)) return rewritten.get(file)
+  const loaderPath = resolve(firefoxDir, file)
+  if (!existsSync(loaderPath)) throw new Error(`[package-firefox] content script file not found: ${file}`)
+
+  const loaderCode = readFileSync(loaderPath, 'utf8')
+  const entry = resolveContentScriptLoaderEntry(loaderCode)
+  if (!entry) return file
+
+  const outputFile = firefoxContentScriptOutputFile(file)
+  mkdirSync(resolve(firefoxDir, dirname(outputFile)), { recursive: true })
+  await esbuild.build({
+    entryPoints: [resolve(firefoxDir, entry)],
+    bundle: true,
+    format: 'iife',
+    outfile: resolve(firefoxDir, outputFile),
+    target: 'es2022',
+    platform: 'browser',
+    logLevel: 'warning'
+  })
+  rewritten.set(file, outputFile)
+  return outputFile
+}
+
+function resolveContentScriptLoaderEntry(loaderCode) {
+  const match = loaderCode.match(/chrome\.runtime\.getURL\(\s*["']([^"']+)["']\s*\)/)
+  return match?.[1]?.replace(/^\/+/, '') || null
+}
+
+function firefoxContentScriptOutputFile(file) {
+  const name = basename(file)
+    .replace(/(?:\.ts)?-loader(?:-[^.]+)?\.js$/i, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+  return `firefox/${name || 'content-script'}.js`
+}
+
 function writeFirefoxManifest({ manifestPath }, logger) {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
 
@@ -71,10 +123,6 @@ function writeFirefoxManifest({ manifestPath }, logger) {
   manifest.browser_specific_settings = {
     gecko: {
       id: 'stackprism@setube.github.io',
-      data_collection_permissions: {
-        required: ['none'],
-        optional: ['browsingActivity', 'technicalAndInteraction', 'websiteContent']
-      },
       strict_min_version: '128.0'
     }
   }

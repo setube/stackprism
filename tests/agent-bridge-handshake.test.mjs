@@ -70,17 +70,142 @@ const makeSessionChrome = ({ enabled = true } = {}) => {
     }
   }
 }
+const makeRequiredBridgeCapabilities = (overrides = {}) => ({
+  agentBridge: true,
+  siteExperienceProfileV1: true,
+  profileChunkTransport: true,
+  bridgeContentPost: true,
+  storageSession: true,
+  experienceProfiler: true,
+  rawProfile: true,
+  viewportMetadata: true,
+  visualScreenshot: true,
+  ...overrides
+})
+
+const pollStartedBridgeClientControl = async controlBody => {
+  const originalWindow = globalThis.window
+  const originalDocument = globalThis.document
+  const originalChrome = globalThis.chrome
+  const originalLocation = globalThis.location
+  const originalFetch = globalThis.fetch
+  const { resetLoadTsModuleCaches, loadTsModule: freshLoadTsModule } = await import('./helpers/load-ts-module.mjs')
+  resetLoadTsModuleCaches()
+
+  const controlIntervalId = 73
+  const clearIntervalCalls = []
+  const intervalCallbacks = []
+  const runtimeMessages = []
+  const statusPosts = []
+  globalThis.location = new URL(bridgeUrl)
+  globalThis.window = {
+    addEventListener: () => {},
+    setInterval: callback => {
+      intervalCallbacks.push(callback)
+      return controlIntervalId
+    },
+    clearInterval: id => clearIntervalCalls.push(id)
+  }
+  globalThis.document = {
+    querySelector: selector => {
+      if (selector === 'meta[name="stackprism-agent-bridge"][content="1"]') return {}
+      if (selector === '#stackprism-agent-bridge-config[type="application/json"]') {
+        return { textContent: JSON.stringify({ captureId, sessionId, nonce, bridgeToken, protocolVersion: 1 }) }
+      }
+      return null
+    },
+    documentElement: { dataset: {} }
+  }
+  globalThis.fetch = async (url, init = {}) => {
+    const requestUrl = String(url)
+    if (requestUrl === `http://127.0.0.1:17370/v1/captures/${captureId}/request`) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ captureId, sessionId, nonce, protocolVersion: 1, request: makeCaptureRequest() })
+      }
+    }
+    if (requestUrl === `http://127.0.0.1:17370/v1/captures/${captureId}/status`) {
+      statusPosts.push(JSON.parse(String(init.body || '{}')))
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true })
+      }
+    }
+    if (requestUrl === `http://127.0.0.1:17370/v1/captures/${captureId}/control`) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => controlBody
+      }
+    }
+    throw new Error(`Unexpected bridge HTTP request: ${requestUrl}`)
+  }
+  globalThis.chrome = {
+    runtime: {
+      onMessage: { addListener: () => {} },
+      sendMessage: (message, callback) => {
+        runtimeMessages.push(message)
+        if (message.type === 'AGENT_BRIDGE_HELLO') {
+          callback?.({
+            ok: true,
+            data: {
+              extensionVersion: '1.3.71',
+              protocolVersion: 1,
+              capabilities: makeRequiredBridgeCapabilities()
+            }
+          })
+          return
+        }
+        if (message.type === 'START_AGENT_CAPTURE' || message.type === 'AGENT_CAPTURE_CONTROL') {
+          callback?.({ ok: true, data: null })
+          return
+        }
+        throw new Error(`Unexpected runtime message: ${message.type}`)
+      },
+      connect: () => ({
+        postMessage: () => {},
+        onMessage: { addListener: () => {} },
+        onDisconnect: { addListener: () => {} }
+      })
+    }
+  }
+
+  try {
+    await freshLoadTsModule('src/content/agent-bridge-client.ts')
+    await waitForCondition(
+      () => statusPosts.length === 2 && runtimeMessages.length === 2 && intervalCallbacks.length === 1,
+      'bridge client control polling startup'
+    )
+
+    intervalCallbacks[0]()
+    await waitForCondition(() => clearIntervalCalls.includes(controlIntervalId), 'bridge client control poll completion')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    return { clearIntervalCalls, runtimeMessages, statusPosts }
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+    if (originalChrome === undefined) delete globalThis.chrome
+    else globalThis.chrome = originalChrome
+    if (originalLocation === undefined) delete globalThis.location
+    else globalThis.location = originalLocation
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+    resetLoadTsModuleCaches()
+  }
+}
 
 test('bridge page parser validates loopback URL and JSON config token', async () => {
-  const { isBridgePageUrl, normalizeWritableStatusPhase, parseBridgePageContext, requestJson, validateCaptureRequestEnvelope } =
-    await loadTsModule('src/content/agent-bridge-client.ts')
+  const { isBridgePageUrl, parseBridgePageContext, validateCaptureRequestEnvelope } = await loadTsModule(
+    'src/content/agent-bridge-request.ts'
+  )
 
   assert.equal(isBridgePageUrl(bridgeUrl), true)
   assert.equal(isBridgePageUrl('https://example.com/bridge'), false)
-  assert.equal(normalizeWritableStatusPhase('failed', 'bridge_connected'), 'bridge_connected')
-  assert.equal(normalizeWritableStatusPhase('failed'), 'cleanup')
-  assert.equal(normalizeWritableStatusPhase('cancelled', 'target_loaded'), 'cleanup')
-  assert.equal(normalizeWritableStatusPhase('running', 'target_loaded'), 'target_loaded')
 
   const context = parseBridgePageContext(bridgeUrl, JSON.stringify({ captureId, sessionId, nonce, bridgeToken, protocolVersion: 1 }))
   assert.deepEqual(context, {
@@ -178,30 +303,6 @@ test('bridge page parser validates loopback URL and JSON config token', async ()
       }),
     /BRIDGE_REQUEST_MISMATCH/
   )
-
-  const originalFetch = globalThis.fetch
-  try {
-    globalThis.fetch = async () => ({
-      ok: false,
-      status: 502,
-      json: async () => {
-        throw new SyntaxError('Unexpected token < in JSON')
-      },
-      text: async () => '<html>token=secret&nonce=n_EEEEEEEEEEEEEEEEEEEEEE</html>'
-    })
-    await assert.rejects(
-      () => requestJson(context, '/v1/captures/cap_CCCCCCCCCCCCCCCCCCCCCC/request'),
-      error => {
-        assert.equal(error.message, 'PROFILE_TRANSPORT_FAILED')
-        assert.equal(error.bridgeError.code, 'PROFILE_TRANSPORT_FAILED')
-        assert.equal(error.bridgeError.details.status, 502)
-        assert.equal(JSON.stringify(error.bridgeError), JSON.stringify(error.bridgeError).replace(/secret|nonce=/g, ''))
-        return true
-      }
-    )
-  } finally {
-    globalThis.fetch = originalFetch
-  }
 })
 
 test('bridge client posts request mismatch and never starts capture when request envelope is bound to another capture', async () => {
@@ -658,6 +759,34 @@ test('bridge client ignores capture status messages bound to another capture', a
     else globalThis.fetch = originalFetch
     resetLoadTsModuleCaches()
   }
+})
+
+test('bridge client stops control polling without sending cancel for terminal bridge status', async () => {
+  const result = await pollStartedBridgeClientControl({ status: 'completed', command: 'cancel' })
+
+  assert.deepEqual(result.clearIntervalCalls, [73])
+  assert.deepEqual(
+    result.runtimeMessages.map(message => message.type),
+    ['AGENT_BRIDGE_HELLO', 'START_AGENT_CAPTURE']
+  )
+  assert.deepEqual(
+    result.statusPosts.map(post => post.status),
+    ['waiting_extension', 'running']
+  )
+})
+
+test('bridge client sends cancel control only for cancel requested bridge status', async () => {
+  const result = await pollStartedBridgeClientControl({ status: 'cancel_requested', command: 'cancel' })
+
+  assert.deepEqual(result.clearIntervalCalls, [73])
+  assert.deepEqual(
+    result.runtimeMessages.map(message => message.type),
+    ['AGENT_BRIDGE_HELLO', 'START_AGENT_CAPTURE', 'AGENT_CAPTURE_CONTROL']
+  )
+  assert.equal(result.runtimeMessages[2].captureId, captureId)
+  assert.equal(result.runtimeMessages[2].sessionId, sessionId)
+  assert.equal(result.runtimeMessages[2].nonce, nonce)
+  assert.equal(result.runtimeMessages[2].command, 'cancel')
 })
 
 test('bridge client exits on non-bridge loopback pages without side effects', async () => {

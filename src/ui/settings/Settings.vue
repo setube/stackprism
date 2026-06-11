@@ -1041,11 +1041,8 @@
       customCss: state.settings.customCss
     })
     try {
-      const consentSnapshot = agentBridgeDataConsentBaseline.value
-      if (consentSnapshot?.supported) {
-        await rollbackAgentBridgeDataConsent(consentSnapshot)
-        await updateAgentBridgeDataConsentState(await loadAgentBridgeDataConsentSnapshot())
-      }
+      await revokeAgentBridgeDataConsent()
+      await updateAgentBridgeDataConsentState(await loadAgentBridgeDataConsentSnapshot())
       await Promise.all([
         chrome.storage.sync.set({ [SETTINGS_STORAGE_KEY]: syncDefaults }),
         chrome.storage.local.remove(SETTINGS_STORAGE_KEY)

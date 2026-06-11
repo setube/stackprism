@@ -248,9 +248,10 @@ const mergeDisplayTechnologyRecords = (items: any[]) => {
     .sort(compareDisplayTechnologies)
 }
 
-const collectRawReferenceTechnologies = (data: any) => {
+const getCurrentPageUrl = (data: any, tab: any): string => tab?.url || data.dynamic?.url || data.main?.url || data.page?.url || ''
+
+const collectRawReferenceTechnologies = (data: any, pageUrl: string = data.page?.url || data.dynamic?.url || data.main?.url || '') => {
   const items: any[] = []
-  const pageUrl = data.page?.url || data.dynamic?.url || data.main?.url || ''
   addAllTechnologies(items, data.page?.technologies)
   addAllTechnologies(items, data.main?.technologies)
   for (const api of data.apis || []) {
@@ -266,11 +267,11 @@ const collectRawReferenceTechnologies = (data: any) => {
 const cleanRawObservationTechnologies = (items: any[], referenceItems: any[] = []) =>
   mergeTechnologyRecords(suppressFrontendFallbackDuplicates(items || [], referenceItems))
 
-const cleanRawDynamicObservation = (dynamic: any, data: any) => {
+const cleanRawDynamicObservation = (dynamic: any, data: any, pageUrl?: string) => {
   if (!dynamic) return null
   return {
     ...dynamic,
-    technologies: cleanRawObservationTechnologies(dynamic.technologies, collectRawReferenceTechnologies(data))
+    technologies: cleanRawObservationTechnologies(dynamic.technologies, collectRawReferenceTechnologies(data, pageUrl))
   }
 }
 
@@ -365,9 +366,8 @@ const shortHostFromUrl = (url: string): string => {
   }
 }
 
-const buildDisplayTechnologies = (data: any, settings: any, suppressMap: Record<string, string[]>) => {
+const buildDisplayTechnologies = (data: any, settings: any, suppressMap: Record<string, string[]>, pageUrl: string) => {
   const all: any[] = []
-  const pageUrl = data.page?.url || data.dynamic?.url || data.main?.url || ''
   addAllTechnologies(all, data.page?.technologies)
   addAllTechnologies(all, data.main?.technologies)
   addAllTechnologies(all, collectHttpProtocolTechs(data, pageUrl))
@@ -417,13 +417,14 @@ const buildDisplayTechnologies = (data: any, settings: any, suppressMap: Record<
 
 const buildPopupResult = async (data: any, settings: any, tab: any) => {
   const suppressMap = collectSuppressMap(await loadTechRules())
-  const technologies = await attachTechnologyLinks(buildDisplayTechnologies(data, settings, suppressMap), settings)
+  const pageUrl = getCurrentPageUrl(data, tab)
+  const technologies = await attachTechnologyLinks(buildDisplayTechnologies(data, settings, suppressMap, pageUrl), settings)
   const resources = mergeResourceSummary(data.page?.resources || {}, data.dynamic || {})
   const main = data.main || {}
   const headerCount =
     typeof main.headerCount === 'number' && main.headerCount >= 0 ? main.headerCount : Object.keys(main.headers || {}).length
   return {
-    url: data.page?.url || data.dynamic?.url || tab?.url || '',
+    url: pageUrl,
     title: data.page?.title || data.dynamic?.title || tab?.title || '',
     generatedAt: new Date().toISOString(),
     updatedAt: getStoredUpdatedAt(data),
@@ -437,11 +438,12 @@ const buildPopupResult = async (data: any, settings: any, tab: any) => {
 
 export const buildPopupRawResult = async (data: any, settings: any, tab: any) => {
   const suppressMap = collectSuppressMap(await loadTechRules())
-  const technologies = await attachTechnologyLinks(buildDisplayTechnologies(data, settings, suppressMap), settings)
+  const pageUrl = getCurrentPageUrl(data, tab)
+  const technologies = await attachTechnologyLinks(buildDisplayTechnologies(data, settings, suppressMap, pageUrl), settings)
   const resources = mergeResourceSummary(data.page?.resources || {}, data.dynamic || {})
   const headers = data.main?.allHeaders || data.main?.headers || {}
   return {
-    url: data.page?.url || data.dynamic?.url || tab?.url || '',
+    url: pageUrl,
     title: data.page?.title || data.dynamic?.title || tab?.title || '',
     generatedAt: new Date().toISOString(),
     technologies,
@@ -450,7 +452,7 @@ export const buildPopupRawResult = async (data: any, settings: any, tab: any) =>
     apiObservations: data.apis || [],
     frameObservations: data.frames || [],
     bundleObservations: data.bundle || null,
-    dynamicObservations: cleanRawDynamicObservation(data.dynamic, data),
+    dynamicObservations: cleanRawDynamicObservation(data.dynamic, data, pageUrl),
     notes: [
       '前端框架和 UI 框架主要通过页面运行时、DOM、资源 URL 和样式类名判断。',
       'Web 服务器、CDN 和后端框架主要依赖响应头与 Cookie 命名线索；如果站点隐藏响应头，结果会保守显示。',

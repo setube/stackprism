@@ -5,7 +5,7 @@ import { test } from 'node:test'
 const manifestSource = await readFile(new URL('../src/manifest.config.ts', import.meta.url), 'utf8')
 
 const EXTENSION_PERMISSIONS = ['activeTab', 'scripting', 'tabs', 'storage', 'webRequest', 'webNavigation']
-const HOST_PERMISSIONS = ['<all_urls>']
+const HOST_PERMISSIONS = ['<all_urls>', 'http://*/*', 'https://*/*', 'http://127.0.0.1/*']
 const OBSERVER_MATCHES = ['http://*/*', 'https://*/*']
 const OBSERVER_SCRIPT = ['src/content/content-observer.ts']
 const BRIDGE_MATCHES = ['http://127.0.0.1/*']

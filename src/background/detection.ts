@@ -5,8 +5,10 @@ import { clearBadge, clearTabSession, getTabData, getTabSnapshot, updateBadgeFor
 import { buildEffectivePageRules, loadDetectorSettings, loadTechRules } from './detector-settings'
 import { scheduleBundleLicenseDetection } from './bundle-license'
 import { injectContentObserver } from './content-injector'
+import { isScriptFileLoadError } from './script-injection-errors'
 import { withTabWriteLock } from './tab-write-lock'
 import { isDetectablePageUrl } from '@/utils/page-support'
+import { detectPageTechnologies } from '@/injected/page-detector-runtime'
 
 const activeDetectionTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const lastDetectionRunAt = new Map<number, number>()
@@ -106,6 +108,9 @@ const withAgentDetectionDeadline = async <T>(operation: Promise<T>, deadlineAt?:
   }
 }
 
+const getFrameInjectionError = (results: chrome.scripting.InjectionResult[] | undefined): unknown =>
+  (results as Array<{ error?: unknown }> | undefined)?.find(result => result.error !== undefined)?.error
+
 const executePageDetection = async (
   tabId: number,
   tab: DetectionTabSnapshot,
@@ -128,16 +133,35 @@ const executePageDetection = async (
     }),
     deadlineAt
   )
-  let injection: chrome.scripting.InjectionResult[] | undefined
+  let page: any = null
   try {
-    injection = await withAgentDetectionDeadline(
-      chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        files: ['injected/page-detector.iife.js']
-      }),
-      deadlineAt
-    )
+    try {
+      const injection = await withAgentDetectionDeadline(
+        chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          files: ['injected/page-detector.iife.js']
+        }),
+        deadlineAt
+      )
+      const frameError = getFrameInjectionError(injection)
+      if (frameError) throw new Error(String(frameError))
+      page = await injection?.[0]?.result
+    } catch (error) {
+      if (!isScriptFileLoadError(error)) throw error
+      const fallback = await withAgentDetectionDeadline(
+        chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: detectPageTechnologies,
+          args: [pageRules]
+        }),
+        deadlineAt
+      )
+      const frameError = getFrameInjectionError(fallback)
+      if (frameError) throw new Error(String(frameError))
+      page = await fallback?.[0]?.result
+    }
   } finally {
     await withAgentDetectionDeadline(
       chrome.scripting.executeScript({
@@ -154,7 +178,6 @@ const executePageDetection = async (
       deadlineAt
     ).catch(() => {})
   }
-  const page = await injection?.[0]?.result
   if (!page) throw new Error('TARGET_INJECTION_FAILED')
 
   const augmentedPage = await augmentPageWithWordPressThemeStyles(page)

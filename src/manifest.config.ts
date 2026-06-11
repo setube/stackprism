@@ -7,7 +7,7 @@ export default defineManifest({
   description: 'StackPrism 用于检测网页前端、后端、CDN、SaaS、广告营销、统计、登录、支付、网站程序和主题模板线索。',
   version: pkg.version,
   permissions: ['activeTab', 'scripting', 'tabs', 'storage', 'webRequest', 'webNavigation'],
-  host_permissions: ['<all_urls>'],
+  host_permissions: ['<all_urls>', 'http://*/*', 'https://*/*', 'http://127.0.0.1/*'],
   background: {
     service_worker: 'src/background/index.ts',
     type: 'module'

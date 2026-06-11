@@ -418,15 +418,15 @@ test('settings reset revokes browser data consent before clearing Agent Bridge d
   const resetSection = settings.slice(resetStart, settings.indexOf('\n\n  const openHelp =', resetStart))
 
   assert.match(settings, /const agentBridgeDataConsentBaseline = ref<AgentBridgeDataConsentSnapshot \| null>\(null\)/)
-  assert.match(resetSection, /const consentSnapshot = agentBridgeDataConsentBaseline\.value/)
-  assert.match(resetSection, /if \(consentSnapshot\?\.supported\) \{/)
-  assert.match(resetSection, /await rollbackAgentBridgeDataConsent\(consentSnapshot\)/)
+  assert.doesNotMatch(resetSection, /rollbackAgentBridgeDataConsent/)
+  assert.doesNotMatch(resetSection, /agentBridgeDataConsentBaseline\.value/)
+  assert.match(resetSection, /await revokeAgentBridgeDataConsent\(\)/)
   assert.match(settings, /const updateAgentBridgeDataConsentState = async \(/)
   assert.match(settings, /await updateAgentBridgeDataConsentState\(await loadAgentBridgeDataConsentSnapshot\(\), consentSnapshot\)/)
   assert.match(resetSection, /await updateAgentBridgeDataConsentState\(await loadAgentBridgeDataConsentSnapshot\(\)\)/)
   assert.ok(
-    resetSection.indexOf('await rollbackAgentBridgeDataConsent(consentSnapshot)') < resetSection.indexOf('chrome.storage.sync.set'),
-    'settings reset must revoke browser data consent before clearing stored settings'
+    resetSection.indexOf('await revokeAgentBridgeDataConsent()') < resetSection.indexOf('chrome.storage.sync.set'),
+    'settings reset must revoke current browser data consent before clearing stored settings'
   )
 })
 

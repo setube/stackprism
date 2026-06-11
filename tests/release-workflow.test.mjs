@@ -155,7 +155,7 @@ test('release workflow runs required gates before packaging artifacts', () => {
   }
 })
 
-test('firefox package manifest declares no required data collection', async () => {
+test('firefox package manifest omits reserved data collection permissions', async () => {
   await withFirefoxDist(
     {
       'dist/manifest.json': manifest({
@@ -172,15 +172,57 @@ test('firefox package manifest declares no required data collection', async () =
       assert.deepEqual(manifestJson.browser_specific_settings, {
         gecko: {
           id: 'stackprism@setube.github.io',
-          data_collection_permissions: {
-            required: ['none'],
-            optional: ['browsingActivity', 'technicalAndInteraction', 'websiteContent']
-          },
           strict_min_version: '128.0'
         }
       })
+      assert.equal('data_collection_permissions' in manifestJson.browser_specific_settings.gecko, false)
+      assert.doesNotMatch(JSON.stringify(manifestJson), /data_collection_permissions/)
       assert.ok((await stat(join(cwd, 'dist-firefox/background.js'))).isFile())
       assert.ok((await stat(join(cwd, 'release/stackprism-v1.3.71.xpi'))).isFile())
+    }
+  )
+})
+
+test('firefox package bundles content script loaders into plain scripts', async () => {
+  await withFirefoxDist(
+    {
+      'dist/manifest.json': manifest({
+        background: { service_worker: 'service-worker-loader.js' },
+        content_scripts: [
+          {
+            js: ['assets/content-observer.ts-loader-unit.js'],
+            matches: ['http://*/*', 'https://*/*'],
+            run_at: 'document_idle'
+          },
+          {
+            js: ['assets/agent-bridge-client.ts-loader-unit.js'],
+            matches: ['http://127.0.0.1/*'],
+            run_at: 'document_idle'
+          }
+        ]
+      }),
+      'dist/service-worker-loader.js': "import './assets/background-entry.js'",
+      'dist/assets/background-entry.js': 'chrome.runtime.onInstalled.addListener(() => {})',
+      'dist/assets/content-observer.ts-loader-unit.js':
+        'const injectTime = performance.now(); (async () => { const { onExecute } = await import(chrome.runtime.getURL("assets/content-observer.ts-unit.js")); onExecute?.({ perf: { injectTime } }); })();',
+      'dist/assets/agent-bridge-client.ts-loader-unit.js':
+        'const injectTime = performance.now(); (async () => { const { onExecute } = await import(chrome.runtime.getURL("assets/agent-bridge-client.ts-unit.js")); onExecute?.({ perf: { injectTime } }); })();',
+      'dist/assets/content-observer.ts-unit.js': 'window.__stackprismObserverLoaded = true; export const onExecute = () => {}',
+      'dist/assets/agent-bridge-client.ts-unit.js': 'window.__stackprismBridgeClientLoaded = true; export const onExecute = () => {}'
+    },
+    async cwd => {
+      const result = await packageFirefox({ root: cwd, logger: { log() {} } })
+      const manifestJson = JSON.parse(await readFile(result.manifestPath, 'utf8'))
+      const scripts = manifestJson.content_scripts.flatMap(script => script.js)
+
+      assert.deepEqual(scripts, ['firefox/content-observer.js', 'firefox/agent-bridge-client.js'])
+      assert.equal(scripts.some(file => /loader/i.test(file)), false)
+
+      for (const file of scripts) {
+        const bundled = await readFile(join(cwd, 'dist-firefox', file), 'utf8')
+        assert.doesNotMatch(bundled, /chrome\.runtime\.getURL/)
+        assert.doesNotMatch(bundled, /await\s+import/)
+      }
     }
   )
 })
@@ -188,7 +230,7 @@ test('firefox package manifest declares no required data collection', async () =
 test('release workflow requires Agent Bridge disclosure confirmation before packaging', () => {
   assert.match(normalizedWorkflowSource, /agent_bridge_disclosure_confirmed/)
   assert.match(normalizedWorkflowSource, /Agent Bridge disclosure confirmed/)
-  assert.match(normalizedWorkflowSource, /Chrome Web Store \/ Edge Add-ons privacy disclosure/)
+  assert.match(normalizedWorkflowSource, /Chrome Web Store \/ Edge Add-ons \/ Firefox Add-ons privacy disclosure/)
 })
 
 test('release workflow dist hygiene script passes a clean dist artifact', async () => {

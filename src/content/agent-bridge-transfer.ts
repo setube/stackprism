@@ -6,8 +6,9 @@ import type {
   AgentProfileTransferCompleteMessage,
   SiteExperienceProfile
 } from '@/types/agent-bridge'
-import { AGENT_PROFILE_TRANSFER_PORT, bridgeProtocolVersion, validateProtocolIdentifier } from '@/types/agent-bridge'
 
+const AGENT_PROFILE_TRANSFER_PORT = 'stackprism-agent-profile-transfer'
+const bridgeProtocolVersion = 1 as const
 interface BridgeTransferContext {
   bridgeOrigin: string
   sessionId: string
@@ -33,6 +34,7 @@ const TRANSFER_TTL_MS = 30000
 const PROFILE_CHUNK_BYTES = 384 * 1024
 const PROFILE_BODY_BYTES = 8 * 1024 * 1024
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/
+const PROFILE_TRANSFER_ID_PATTERN = /^xfer_[A-Za-z0-9_-]{22}$/
 
 const makeError = (code: AgentBridgeError['code'], message: string): AgentBridgeError => ({ code, message })
 
@@ -68,7 +70,7 @@ const validateTransferMessage = (context: BridgeTransferContext, message: AgentB
   message.nonce === context.nonce
 
 const validateTransferId = (message: AgentBridgeRuntimeMessage): boolean =>
-  'profileTransferId' in message && validateProtocolIdentifier('profileTransferId', message.profileTransferId)
+  'profileTransferId' in message && PROFILE_TRANSFER_ID_PATTERN.test(message.profileTransferId)
 
 const clearTransfer = (message: AgentBridgeRuntimeMessage): void => {
   if ('profileTransferId' in message) transferState.delete(message.profileTransferId)

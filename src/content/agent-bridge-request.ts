@@ -1,5 +1,12 @@
-import { bridgeProtocolVersion, validateProtocolIdentifier, type AgentCaptureRequest } from '@/types/agent-bridge'
+import type { AgentCaptureRequest } from '@/types/agent-bridge'
 
+const bridgeProtocolVersion = 1 as const
+const protocolIdentifierSpecs = {
+  bridgeToken: /^spbt_[A-Za-z0-9_-]{43}$/,
+  captureId: /^cap_[A-Za-z0-9_-]{22}$/,
+  sessionId: /^s_[A-Za-z0-9_-]{22}$/,
+  nonce: /^n_[A-Za-z0-9_-]{22}$/
+} as const
 const REQUEST_FIELDS = new Set(['url', 'mode', 'waitMs', 'include', 'viewports', 'options', 'protocolVersion'])
 const VIEWPORT_FIELDS = new Set(['name', 'width', 'height', 'deviceScaleFactor'])
 const OPTION_FIELDS = new Set([
@@ -19,6 +26,11 @@ const BRIDGE_QUERY_KINDS = {
   capture: 'captureId',
   nonce: 'nonce'
 } as const
+
+const validateProtocolIdentifier = (kind: keyof typeof protocolIdentifierSpecs | string, value: unknown): boolean => {
+  const spec = protocolIdentifierSpecs[kind as keyof typeof protocolIdentifierSpecs]
+  return typeof value === 'string' && Boolean(spec?.test(value))
+}
 
 export interface BridgePageContext {
   bridgeOrigin: string

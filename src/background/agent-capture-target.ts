@@ -8,6 +8,7 @@ import type { AgentCaptureRequest } from '@/types/agent-bridge'
 import type { AgentBridgeError, AgentCaptureScreenshot } from '@/types/agent-bridge'
 import { makeAgentCaptureError } from './agent-capture-common'
 import { logBackgroundError } from './logging'
+import { isScriptFileLoadError } from './script-injection-errors'
 import { isDetectablePageUrl } from '@/utils/page-support'
 
 const TARGET_LOAD_TIMEOUT_REPORTING_GRACE_MS = 5000
@@ -205,6 +206,115 @@ export const reloadTargetTabBypassingCache = async (tabId: number, deadlineAt: n
   })
 }
 
+const getFrameInjectionError = (results: chrome.scripting.InjectionResult[] | undefined): unknown =>
+  (results as Array<{ error?: unknown }> | undefined)?.find(result => result.error !== undefined)?.error
+
+const collectInlineExperienceProfile = (profilerOptions: { captureScreenshotMetadata?: boolean } = {}) => {
+  const includeGeometry = profilerOptions.captureScreenshotMetadata === true
+  const cleanText = (value: unknown, limit = 140): string =>
+    String(value ?? '')
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted]')
+      .replace(/\b(?:\+?\d[\d\s-]{8,}\d|\d{11,})\b/g, '[redacted]')
+      .replace(/(?:[￥$€£]\s*\d+(?:\.\d+)?)/g, '[redacted]')
+      .replace(
+        /\b([A-Za-z0-9_-]*(?:token|secret|session|auth|authorization|key|signature|password|pass|cookie)[A-Za-z0-9_-]*)\s*[:=]\s*(?:Bearer\s+)?[^,\s;&]+/gi,
+        '$1=[redacted]'
+      )
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, limit)
+  const sensitivePathWordPattern = /^(?:token|secret|session|auth|authorization|signature|password|cookie|passcode)$/i
+  const sensitivePathShortTokenPattern = /(?:^|[-_.])(?:key|pass)(?:$|[-_.])/i
+  const sensitivePathCompoundPattern =
+    /^(?:(?:api|access|private|public|secret|session|auth|token)[-_.]?(?:key|pass|token|secret|signature|code|id)|(?:key|pass|token)[-_.]?(?:token|secret|signature|code|id)|(?:reset|verify|access|auth|session|csrf|xsrf)[-_.]?(?:token|code|secret|key|signature))$/i
+  const sensitivePathCamelPattern =
+    /^(?:apiKey|privateKey|publicKey|accessToken|refreshToken|sessionId|secretToken|authToken|csrfToken|xsrfToken)$/i
+  const highEntropyPathSegmentPattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z0-9_-]{24,}$/
+  const pathSegmentStem = (segment: string): string => segment.replace(/\.[A-Za-z0-9]{1,8}$/i, '')
+  const isSensitivePathSegment = (segment: string): boolean => {
+    const stem = pathSegmentStem(segment)
+    return (
+      sensitivePathWordPattern.test(segment) ||
+      sensitivePathWordPattern.test(stem) ||
+      sensitivePathShortTokenPattern.test(segment) ||
+      sensitivePathShortTokenPattern.test(stem) ||
+      sensitivePathCompoundPattern.test(segment) ||
+      sensitivePathCompoundPattern.test(stem) ||
+      sensitivePathCamelPattern.test(segment) ||
+      sensitivePathCamelPattern.test(stem) ||
+      /^[0-9a-f]{16,}$/i.test(stem) ||
+      highEntropyPathSegmentPattern.test(stem) ||
+      segment.includes('=')
+    )
+  }
+  const redactPathname = (pathname: string): string =>
+    pathname
+      .split('/')
+      .map(segment => (segment && isSensitivePathSegment(segment) ? '[redacted]' : segment))
+      .join('/')
+  const safeRect = (element: Element) => {
+    try {
+      const rect = element.getBoundingClientRect()
+      return { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }
+    } catch {
+      return null
+    }
+  }
+  const safeUrl = (value: unknown): string => {
+    try {
+      const url = new URL(String(value || ''), location.href)
+      if (!/^https?:$/i.test(url.protocol)) return ''
+      url.username = ''
+      url.password = ''
+      url.hash = ''
+      url.pathname = redactPathname(url.pathname)
+      for (const name of [...url.searchParams.keys()]) url.searchParams.set(name, '[redacted]')
+      return url.toString()
+    } catch {
+      return ''
+    }
+  }
+  const nodes = [...document.querySelectorAll('body *')].slice(0, 240)
+  const textSamples: string[] = []
+  const assets: string[] = []
+  const samples = nodes
+    .filter(element => ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA', 'FORM', 'NAV', 'HEADER', 'MAIN', 'FOOTER', 'SECTION'].includes(element.tagName))
+    .slice(0, 40)
+    .map(element => {
+      const text = cleanText(element.textContent || element.getAttribute('aria-label') || element.getAttribute('title') || '', 100)
+      if (text && textSamples.length < 40 && !textSamples.includes(text)) textSamples.push(text)
+      return {
+        tag: element.tagName.toLowerCase(),
+        text,
+        role: cleanText(element.getAttribute('role') || '', 40),
+        ...(includeGeometry ? { rect: safeRect(element) } : {})
+      }
+    })
+  for (const element of [...document.querySelectorAll('img[src], script[src], link[href]')].slice(0, 120)) {
+    const value = (element as HTMLImageElement).currentSrc || (element as HTMLImageElement).src || (element as HTMLLinkElement).href
+    const clean = safeUrl(value)
+    if (clean && !assets.includes(clean)) assets.push(clean)
+  }
+  if (!textSamples.length) {
+    const bodyText = cleanText(document.body?.textContent || '', 600)
+    if (bodyText) textSamples.push(bodyText)
+  }
+  return {
+    visual: {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      colorScheme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    },
+    layout: { landmarks: samples.filter(sample => ['nav', 'header', 'main', 'footer', 'section'].includes(sample.tag)) },
+    components: { samples, counts: { sampled: samples.length } },
+    interaction: { passive: true, links: document.querySelectorAll('a[href]').length, buttons: document.querySelectorAll('button').length },
+    ux: { textSamples, pagePurpose: [], primaryUserPath: [], informationHierarchy: [] },
+    document: { language: cleanText(document.documentElement.lang || document.body?.getAttribute('lang') || '', 40) },
+    assets: { urls: assets },
+    evidence: { truncation: { domNodes: Math.max(0, document.querySelectorAll('body *').length - nodes.length), resourceUrls: 0 } },
+    limitations: ['passive_interaction_only', 'firefox_inline_experience_profile']
+  }
+}
+
 export const executeExperienceProfiler = async (
   tabId: number,
   options: { captureScreenshotMetadata: boolean } = { captureScreenshotMetadata: false }
@@ -218,12 +328,27 @@ export const executeExperienceProfiler = async (
     args: [{ captureScreenshotMetadata: options.captureScreenshotMetadata === true }]
   })
   try {
-    const injection = await chrome.scripting.executeScript({
-      target: { tabId },
-      world: 'MAIN',
-      files: ['injected/experience-profiler.iife.js']
-    })
-    return injection?.[0]?.result || null
+    try {
+      const injection = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        files: ['injected/experience-profiler.iife.js']
+      })
+      const frameError = getFrameInjectionError(injection)
+      if (frameError) throw new Error(String(frameError))
+      return injection?.[0]?.result || null
+    } catch (error) {
+      if (!isScriptFileLoadError(error)) throw error
+      const fallback = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: collectInlineExperienceProfile,
+        args: [{ captureScreenshotMetadata: options.captureScreenshotMetadata === true }]
+      })
+      const frameError = getFrameInjectionError(fallback)
+      if (frameError) throw new Error(String(frameError))
+      return fallback?.[0]?.result || null
+    }
   } finally {
     await chrome.scripting
       .executeScript({

@@ -436,6 +436,72 @@ test('popup results ignore cross-site HTTP protocol observations', async () => {
   }
 })
 
+test('popup same-site filtering uses current tab URL when page detection is stale', async () => {
+  resetLoadTsModuleCaches()
+  const originalChrome = globalThis.chrome
+  const originalFetch = globalThis.fetch
+  globalThis.chrome = {
+    runtime: {
+      getURL: path => `chrome-extension://stackprism/${path}`
+    }
+  }
+  globalThis.fetch = async url => {
+    const text = String(url)
+    if (text.endsWith('/rules/index.json')) return new Response(JSON.stringify({ schemaVersion: 1, files: [] }), { status: 200 })
+    if (text.endsWith('/tech-links.json')) return new Response(JSON.stringify({ links: {} }), { status: 200 })
+    return new Response('{}', { status: 200 })
+  }
+
+  try {
+    const { buildPopupCacheRecord, buildPopupRawResult } = await loadTsModule('src/background/popup-cache.ts')
+    const data = {
+      updatedAt: 1,
+      page: { url: 'https://old.example.test/app', title: 'Old page', technologies: [] },
+      main: {
+        url: 'https://app.example.com/dashboard',
+        technologies: [],
+        headers: {},
+        headerCount: 0,
+        httpProtocol: '2'
+      },
+      apis: [
+        {
+          url: 'https://api.example.com/graphql',
+          httpProtocol: '2',
+          technologies: [
+            { category: 'Web 服务器', name: 'nginx', confidence: '中', evidence: ['server: nginx'], source: '响应头' },
+            { category: 'CDN / 托管', name: 'Cloudflare', confidence: '高', evidence: ['cf-ray'], source: '响应头' },
+            { category: '后端 / 服务器框架', name: 'Express', confidence: '中', evidence: ['x-powered-by'], source: '响应头' }
+          ]
+        },
+        {
+          url: 'https://tracker.third-party.test/pixel',
+          httpProtocol: '3',
+          technologies: [{ category: 'Web 服务器', name: 'third-party-nginx', confidence: '中', evidence: ['server'], source: '响应头' }]
+        }
+      ]
+    }
+    const settings = {}
+    const tab = { url: 'https://app.example.com/dashboard', title: 'Dashboard' }
+
+    const raw = await buildPopupRawResult(data, settings, tab)
+    const popup = await buildPopupCacheRecord(data, settings, tab)
+    const rawNames = raw.technologies.map(tech => tech.name).sort()
+    const popupNames = popup.technologies.map(tech => tech.name).sort()
+
+    assert.deepEqual(rawNames, ['Cloudflare', 'Express', 'HTTP/2', 'nginx'])
+    assert.deepEqual(popupNames, ['Cloudflare', 'Express', 'HTTP/2', 'nginx'])
+    assert.equal(raw.url, 'https://app.example.com/dashboard')
+    assert.equal(popup.url, 'https://app.example.com/dashboard')
+    assert.doesNotMatch(JSON.stringify([...raw.technologies, ...popup.technologies]), /third-party-nginx|HTTP\/3/)
+  } finally {
+    if (originalChrome === undefined) delete globalThis.chrome
+    else globalThis.chrome = originalChrome
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
 test('popup results keep intentional cross-site service detections and drop infrastructure detections', async () => {
   resetLoadTsModuleCaches()
   const originalChrome = globalThis.chrome
