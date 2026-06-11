@@ -56,6 +56,8 @@ python3 agent-skill/stackprism-site-experience/scripts/stackprism_bridge.py
 
 Python fallback 基于标准库 HTTP server，定位是 Node 不可用时的兼容路径。长时间批量采集、重复压力测试或需要更可靠连接上限控制时优先使用 JavaScript bridge；如果 Python fallback 在本机连接堆积下超时，应停止子进程、重新启动 bridge 并重试，不复用半完成 capture。
 
+JavaScript bridge 与 Python fallback 的 bridge 页面 CSS 和客户端脚本必须保持字节级一致。修改 `agent-skill/stackprism-site-experience/scripts/bridge/bridge-page-assets.mjs` 时，必须同步更新 `agent-skill/stackprism-site-experience/scripts/stackprism_bridge_lib/bridge_page_assets.py`，并保留 `tests/stackprism_bridge_py.test.mjs` 中的资产一致性测试通过。
+
 测试环境可设置 `STACKPRISM_BRIDGE_NO_OPEN=1`，此时不会自动打开浏览器，但仍会返回 `bridgeUrl`。
 
 Agent 只读取 stdout 的第一条 ready JSON line，并应在 10 秒内完成解析。超时按 `BRIDGE_START_TIMEOUT`，非 JSON stdout 按 `BRIDGE_READY_PARSE_FAILED`，`protocolVersion` 不匹配按 `BRIDGE_PROTOCOL_UNSUPPORTED` 处理；这些失败都必须停止 bridge 子进程并等待退出。
@@ -132,8 +134,14 @@ smoke 结果按三类理解：
 ```bash
 pnpm run build:injected
 pnpm run test:unit
+pnpm run lint
 pnpm run typecheck
-pnpm run build
+pnpm run docs:build
+pnpm run check:links
+node build-scripts/package-firefox.mjs
 node --check agent-skill/stackprism-site-experience/scripts/stackprism-bridge.mjs
-python3 -m py_compile agent-skill/stackprism-site-experience/scripts/stackprism_bridge.py
+python3 -m py_compile agent-skill/stackprism-site-experience/scripts/stackprism_bridge.py agent-skill/stackprism-site-experience/scripts/stackprism_bridge_lib/*.py
+git diff --check
 ```
+
+`pnpm run typecheck` 已包含 `vue-tsc --noEmit` 和 `pnpm run build`，因此会同时刷新 Chrome `dist/` 构建产物。`node build-scripts/package-firefox.mjs` 依赖已有 `dist/`，用于验证 Firefox manifest 转换、background rebundle、content script bundling 和 XPI 产物边界。验证后应清理或忽略 `dist/`、`dist-firefox/`、`release/`、`public/injected/`、`docs/.vitepress/dist/`、`docs/public/icon.svg` 与 Python `__pycache__`，不要把这些本地产物纳入提交。
