@@ -12,22 +12,148 @@ import {
 } from './popup-cache'
 import { runActivePageDetection, saveTabDataAndBadge } from './detection'
 import { loadDetectorSettings } from './detector-settings'
+import { handleAgentBridgeHello, validateAgentCaptureControlMessage } from './agent-bridge-session'
+import { cancelAgentCapture, registerAgentProfileTransferPort, startAgentCapture } from './agent-capture'
+import { isAgentBridgeRequestForTab, isAgentBridgeTab } from './agent-bridge-tabs'
 import { withTabWriteLock } from './tab-write-lock'
+import { logBackgroundError } from './logging'
 import { checkPageSupport, isDetectablePageUrl } from '@/utils/page-support'
+import type { AgentBridgeError } from '@/types/agent-bridge'
 
 const clearUnsupportedTab = async (tabId: number) => {
   await clearTabSession(tabId)
   clearBadge(tabId)
 }
 
+const tabIdMessages = new Set([
+  'GET_HEADER_DATA',
+  'GET_POPUP_RESULT',
+  'GET_POPUP_RAW_RESULT',
+  'START_BACKGROUND_DETECTION',
+  'PAGE_DETECTION_RESULT'
+])
+
+const ORDINARY_BRIDGE_CACHE_ERROR = 'Agent Bridge 页面不能访问普通检测缓存。'
+
+class OrdinaryBridgeSenderError extends Error {
+  constructor(message = ORDINARY_BRIDGE_CACHE_ERROR) {
+    super(message)
+    this.name = 'OrdinaryBridgeSenderError'
+  }
+}
+
+const rejectOrdinaryBridgeSender = (message: any, sender: chrome.runtime.MessageSender): string => {
+  if (isAgentBridgeTab(sender.tab)) return ORDINARY_BRIDGE_CACHE_ERROR
+  if (sender.tab?.id !== undefined && tabIdMessages.has(message.type) && Number(message.tabId) !== sender.tab.id) {
+    return 'content script 不能操作其他 tab。'
+  }
+  return ''
+}
+
+const rejectRegisteredBridgeSender = async (sender: chrome.runtime.MessageSender): Promise<string> => {
+  const tabId = sender.tab?.id
+  if (typeof tabId !== 'number' || tabId < 0) return ''
+  const url = sender.url || sender.tab?.url || sender.tab?.pendingUrl || ''
+  return (await isAgentBridgeRequestForTab(url, tabId, sender.tab)) ? ORDINARY_BRIDGE_CACHE_ERROR : ''
+}
+
+const ensureRegisteredBridgeSenderAllowed = async (sender: chrome.runtime.MessageSender): Promise<void> => {
+  const rejected = await rejectRegisteredBridgeSender(sender)
+  if (rejected) throw new OrdinaryBridgeSenderError(rejected)
+}
+
+const sendOrdinaryMessageError = (sendResponse: (response?: any) => void, error: unknown): void => {
+  sendResponse({ ok: false, error: error instanceof OrdinaryBridgeSenderError ? error.message : String(error) })
+}
+
+const sendAgentBridgeInternalError = (sendResponse: (response?: any) => void, operation: string, error: unknown): void => {
+  logBackgroundError(`${operation} failed`, { error })
+  const bridgeError: AgentBridgeError = {
+    code: 'INVALID_REQUEST',
+    message: 'Agent Bridge request failed.'
+  }
+  sendResponse({ ok: false, error: bridgeError })
+}
+
+const rejectPopupTargetTab = async (tabId: number, sender: chrome.runtime.MessageSender): Promise<string> => {
+  if (sender.tab) return ''
+  const [tab, snapshot] = await Promise.all([chrome.tabs.get(tabId).catch(() => null), getTabSnapshot(tabId).catch(() => null)])
+  const url = tab?.url || tab?.pendingUrl || snapshot?.url || ''
+  if (!url) return '目标 tab 不可用。'
+  if (tab?.incognito) return '不能读取隐身窗口 tab。'
+  if (await isAgentBridgeRequestForTab(url, tabId, { url, pendingUrl: tab?.pendingUrl })) {
+    return ORDINARY_BRIDGE_CACHE_ERROR
+  }
+  const support = checkPageSupport(url)
+  return support.supported ? '' : support.reason
+}
+
+const runBackgroundDetectionAfterResponse = async (tabId: number): Promise<void> => {
+  const tab = await getTabSnapshot(tabId)
+  if (!isDetectablePageUrl(tab.url)) {
+    await clearUnsupportedTab(tabId)
+    return
+  }
+  await runActivePageDetection(tabId, { force: true })
+}
+
 export const registerMessageRouter = () => {
+  chrome.runtime.onConnect.addListener(registerAgentProfileTransferPort)
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || !message.type) return false
 
+    if (message.type === 'AGENT_BRIDGE_HELLO') {
+      handleAgentBridgeHello(message, sender)
+        .then(response => sendResponse(response))
+        .catch(error => sendAgentBridgeInternalError(sendResponse, 'AGENT_BRIDGE_HELLO', error))
+      return true
+    }
+
+    if (message.type === 'START_AGENT_CAPTURE') {
+      startAgentCapture(message, sender)
+        .then(response => sendResponse(response))
+        .catch(caught => sendAgentBridgeInternalError(sendResponse, 'START_AGENT_CAPTURE', caught))
+      return true
+    }
+
+    if (message.type === 'AGENT_CAPTURE_CONTROL') {
+      validateAgentCaptureControlMessage(message, sender)
+        .then(validated => {
+          if (!validated.ok) {
+            sendResponse({ ok: false, error: validated.error })
+            return
+          }
+          return cancelAgentCapture(message, sender).then(sendResponse)
+        })
+        .catch(error => sendAgentBridgeInternalError(sendResponse, 'AGENT_CAPTURE_CONTROL', error))
+      return true
+    }
+
+    const ordinaryBridgeError = rejectOrdinaryBridgeSender(message, sender)
+    if (ordinaryBridgeError) {
+      sendResponse({ ok: false, error: ordinaryBridgeError })
+      return false
+    }
+
     if (message.type === 'GET_HEADER_DATA') {
-      Promise.all([getTabData(message.tabId), loadDetectorSettings()])
-        .then(([data, settings]) => sendResponse({ ok: true, data: addStoredCustomHeaderRules(data, settings) }))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      const tabId = Number(message.tabId)
+      if (!Number.isInteger(tabId) || tabId < 0) {
+        sendResponse({ ok: false, error: '缺少有效 tabId' })
+        return false
+      }
+      ensureRegisteredBridgeSenderAllowed(sender)
+        .then(() => {
+          return rejectPopupTargetTab(tabId, sender)
+        })
+        .then(rejected => {
+          if (rejected) throw new Error(rejected)
+          return Promise.all([getTabData(tabId), loadDetectorSettings()])
+        })
+        .then(([tabData, settings]) => {
+          sendResponse({ ok: true, data: addStoredCustomHeaderRules(tabData, settings) })
+        })
+        .catch(error => sendOrdinaryMessageError(sendResponse, error))
       return true
     }
 
@@ -37,9 +163,16 @@ export const registerMessageRouter = () => {
         sendResponse({ ok: false, error: '缺少有效 tabId' })
         return false
       }
-      getPopupResultResponse(tabId)
+      ensureRegisteredBridgeSenderAllowed(sender)
+        .then(() => {
+          return rejectPopupTargetTab(tabId, sender)
+        })
+        .then(rejected => {
+          if (rejected) throw new Error(rejected)
+          return getPopupResultResponse(tabId)
+        })
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendOrdinaryMessageError(sendResponse, error))
       return true
     }
 
@@ -49,7 +182,14 @@ export const registerMessageRouter = () => {
         sendResponse({ ok: false, error: '缺少有效 tabId' })
         return false
       }
-      getTabSnapshot(tabId)
+      ensureRegisteredBridgeSenderAllowed(sender)
+        .then(() => {
+          return rejectPopupTargetTab(tabId, sender)
+        })
+        .then(rejected => {
+          if (rejected) throw new Error(rejected)
+          return getTabSnapshot(tabId)
+        })
         .then(async tab => {
           const support = checkPageSupport(tab.url)
           if (!support.supported) {
@@ -60,7 +200,7 @@ export const registerMessageRouter = () => {
           return buildPopupRawResult(addStoredCustomHeaderRules(data, settings), settings, tab)
         })
         .then(data => sendResponse({ ok: true, data }))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendOrdinaryMessageError(sendResponse, error))
       return true
     }
 
@@ -78,16 +218,19 @@ export const registerMessageRouter = () => {
         sendResponse({ ok: false, error: '缺少有效 tabId' })
         return false
       }
-      sendResponse({ ok: true })
-      getTabSnapshot(tabId)
-        .then(tab => {
-          if (!isDetectablePageUrl(tab.url)) {
-            return clearUnsupportedTab(tabId)
-          }
-          return runActivePageDetection(tabId, { force: true })
+      ensureRegisteredBridgeSenderAllowed(sender)
+        .then(() => {
+          return rejectPopupTargetTab(tabId, sender)
         })
-        .catch(() => {})
-      return false
+        .then(rejected => {
+          if (rejected) throw new Error(rejected)
+          sendResponse({ ok: true })
+          runBackgroundDetectionAfterResponse(tabId).catch(error =>
+            logBackgroundError('runBackgroundDetectionAfterResponse failed', { tabId, error })
+          )
+        })
+        .catch(error => sendOrdinaryMessageError(sendResponse, error))
+      return true
     }
 
     if (message.type === 'GET_WORDPRESS_THEME_DETAILS') {
@@ -103,7 +246,10 @@ export const registerMessageRouter = () => {
         sendResponse({ ok: false, error: '缺少有效 tabId' })
         return false
       }
-      getTabSnapshot(tabId)
+      ensureRegisteredBridgeSenderAllowed(sender)
+        .then(() => {
+          return getTabSnapshot(tabId)
+        })
         .then(tab => {
           if (!isDetectablePageUrl(tab.url)) {
             return clearUnsupportedTab(tabId).then(() => false)
@@ -112,7 +258,7 @@ export const registerMessageRouter = () => {
           return true
         })
         .then(queued => sendResponse({ ok: true, queued }))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendOrdinaryMessageError(sendResponse, error))
       return true
     }
 
@@ -122,7 +268,10 @@ export const registerMessageRouter = () => {
         sendResponse({ ok: false, error: '缺少有效 tabId' })
         return false
       }
-      Promise.all([loadDetectorSettings(), getTabSnapshot(tabId)])
+      ensureRegisteredBridgeSenderAllowed(sender)
+        .then(() => {
+          return Promise.all([loadDetectorSettings(), getTabSnapshot(tabId)])
+        })
         .then(async ([settings, tab]) => {
           if (!isDetectablePageUrl(tab.url)) {
             await clearUnsupportedTab(tabId)
@@ -139,7 +288,7 @@ export const registerMessageRouter = () => {
           })
         })
         .then(() => sendResponse({ ok: true }))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendOrdinaryMessageError(sendResponse, error))
       return true
     }
 

@@ -1,0 +1,7 @@
+interface:
+  display_name: 'StackPrism Site Experience'
+  short_description: 'Capture StackPrism Agent Bridge URL profiles'
+  brand_color: '#0F766E'
+  default_prompt: 'Use $stackprism-site-experience to capture StackPrism Agent Bridge profile for http(s) URL website recreation, UX comparison, live browser evidence, or Agent Bridge E2E validation; confirm extension/Bridge are enabled and target is not private login/account.'
+policy:
+  allow_implicit_invocation: true

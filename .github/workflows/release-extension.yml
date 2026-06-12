@@ -10,6 +10,11 @@ on:
         description: 已存在的 release tag，留空则自动按 manifest.json 版本拼成 v{version}
         required: false
         type: string
+      agent_bridge_disclosure_confirmed:
+        description: 如果本版本包含 Agent Bridge，确认已更新 Chrome/Edge/Firefox 商店隐私披露、数据用途说明、用户可见说明和 release note
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -37,8 +42,142 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 构建扩展
+      - name: Lint
+        run: pnpm run lint
+
+      - name: 构建注入脚本
+        run: pnpm run build:injected
+
+      - name: 单元测试
+        run: pnpm run test:unit
+
+      - name: 类型检查（仓库脚本会刷新 dist）
+        run: pnpm run typecheck
+
+      - name: 文档构建
+        run: pnpm run docs:build
+
+      - name: 发布前刷新扩展 dist
         run: pnpm run build
+
+      - name: 校验发布产物边界
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, statSync } from 'node:fs'
+          import { basename, join, relative } from 'node:path'
+
+          const root = 'dist'
+          const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
+          const failures = []
+          const agentOnlySourceFiles = [
+            'stackprism-bridge.mjs',
+            'stackprism_bridge.py',
+            'capture-site.mjs',
+            'capture-site-args.mjs',
+            'capture-runtime.mjs',
+            'capture-screenshot-artifact.mjs',
+            'capture-store.mjs',
+            'http-handlers.mjs',
+            'http-server.mjs',
+            'open-browser.mjs',
+            'protocol.mjs',
+            'security.mjs',
+            'url-policy.mjs'
+          ]
+          const agentOnlySourceFileSet = new Set(agentOnlySourceFiles)
+          const agentOnlyPathPatterns = [
+            /(?:^|\/)agent-skill(?:\/|$)/,
+            /(?:^|\/)docs\/superpowers(?:\/|$)/,
+            /(?:^|\/)tests(?:\/|$)/
+          ]
+          const pathBasename = value => basename(String(value || '').replaceAll('\\', '/'))
+          const isAgentOnlySourcePath = path => agentOnlySourceFileSet.has(pathBasename(path))
+
+          if (Object.prototype.hasOwnProperty.call(manifest, 'externally_connectable')) {
+            failures.push('dist/manifest.json must not expose externally_connectable')
+          }
+
+          for (const resource of manifest.web_accessible_resources || []) {
+            for (const path of resource.resources || []) {
+              if (
+                agentOnlyPathPatterns.some(pattern => pattern.test(path)) ||
+                isAgentOnlySourcePath(path) ||
+                path.includes('experience-profiler.iife.js')
+              ) {
+                failures.push(`web_accessible_resources exposes agent-only path: ${path}`)
+              }
+            }
+          }
+
+          const disallowed = [
+            ...agentOnlyPathPatterns,
+            /(?:^|\/)__pycache__(?:\/|$)/,
+            /\.py[co]?$/
+          ]
+
+          const walk = dir => {
+            for (const entry of readdirSync(dir)) {
+              const full = join(dir, entry)
+              const rel = relative(root, full)
+              if (statSync(full).isDirectory()) {
+                walk(full)
+                continue
+              }
+              if (disallowed.some(pattern => pattern.test(rel)) || isAgentOnlySourcePath(rel)) {
+                failures.push(`dist contains agent-only or test artifact: ${rel}`)
+              }
+            }
+          }
+          walk(root)
+
+          if (failures.length) {
+            for (const failure of failures) console.error(`::error::${failure}`)
+            process.exit(1)
+          }
+          NODE
+
+      - name: 校验 Agent Bridge 发布披露确认
+        shell: bash
+        env:
+          AGENT_BRIDGE_DISCLOSURE_CONFIRMED: ${{ inputs.agent_bridge_disclosure_confirmed }}
+        run: |
+          set -euo pipefail
+
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          import { join } from 'node:path'
+
+          const manifest = JSON.parse(readFileSync(join('dist', 'manifest.json'), 'utf8'))
+          const bridgeMatches = entry => (entry.matches || []).includes('http://127.0.0.1/*')
+          const hasAgentBridgeContentScript = (manifest.content_scripts || []).some(entry =>
+            bridgeMatches(entry) && (entry.js || []).some(path => path.includes('agent-bridge'))
+          )
+          const hasAgentBridgeResource = (manifest.web_accessible_resources || []).some(entry =>
+            bridgeMatches(entry) && (entry.resources || []).some(path => path.includes('agent-bridge'))
+          )
+
+          if (!hasAgentBridgeContentScript && !hasAgentBridgeResource) {
+            process.exit(0)
+          }
+
+          const eventPath = process.env.GITHUB_EVENT_PATH
+          const event = eventPath ? JSON.parse(readFileSync(eventPath, 'utf8')) : {}
+          const releaseBody = event.release?.body || ''
+          const workflowDispatchConfirmed = process.env.AGENT_BRIDGE_DISCLOSURE_CONFIRMED === 'true'
+          const releaseBodyConfirmed = /\[(x|X)\]\s*Agent Bridge disclosure confirmed/.test(releaseBody)
+
+          if (workflowDispatchConfirmed || releaseBodyConfirmed) {
+            process.exit(0)
+          }
+
+          console.error(
+            '::error::Agent Bridge is present in dist. Confirm Chrome Web Store / Edge Add-ons / Firefox Add-ons privacy disclosure, user-visible data-use text, and release notes before packaging. For workflow_dispatch set agent_bridge_disclosure_confirmed=true; for release events add a checked release-note line: [x] Agent Bridge disclosure confirmed.'
+          )
+          process.exit(1)
+          NODE
 
       - name: 读取版本号并校验
         id: meta

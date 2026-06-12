@@ -94,7 +94,10 @@ test('formats detected technologies for humans and AI agents', async () => {
   assert.equal(structured.technologies.length, 4)
   assert.deepEqual(someTech.sources, ['响应头'])
   assert.equal(Object.hasOwn(someTech, 'source'), false)
-  assert.equal(structured.technologies.some(item => item.category === '应被过滤'), false)
+  assert.equal(
+    structured.technologies.some(item => item.category === '应被过滤'),
+    false
+  )
 })
 
 test('keeps empty detection reports readable and structured', async () => {

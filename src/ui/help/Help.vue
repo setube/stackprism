@@ -32,6 +32,20 @@
     </section>
 
     <section class="panel">
+      <h2>Agent Bridge 是什么</h2>
+      <p>
+        它让本机 AI Agent 通过
+        <code>127.0.0.1</code>
+        读取当前浏览器 profile 里可观测的技术栈、页面结构、截图和体验摘要，用来复刻相似的网站体验。
+      </p>
+      <ul class="plain-list">
+        <li>默认关闭，只在当前浏览器 profile 手动开启。</li>
+        <li>只读采集，不读取 Cookie、Authorization、localStorage/sessionStorage 明文。</li>
+        <li>网络限制默认收紧；放开所有网络目标会要求二次确认。</li>
+      </ul>
+    </section>
+
+    <section class="panel">
       <h2>最快上手：五步添加一条规则</h2>
       <ol class="steps">
         <li>打开设置页，找到"自定义规则"。</li>
@@ -366,6 +380,12 @@ examplepay-sdk</pre
     line-height: 1.65;
     padding-top: 132px;
   }
+
+  @media (max-width: 760px) {
+    body {
+      padding-top: 0;
+    }
+  }
 </style>
 
 <style lang="scss" scoped>
@@ -466,7 +486,7 @@ examplepay-sdk</pre
     font-size: 24px;
     font-weight: 600;
     gap: 10px;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
     line-height: 1.2;
     margin-bottom: 8px;
   }
@@ -475,7 +495,7 @@ examplepay-sdk</pre
     color: var(--text);
     font-size: 16px;
     font-weight: 600;
-    letter-spacing: -0.005em;
+    letter-spacing: 0;
     margin-bottom: 12px;
   }
 
@@ -613,6 +633,10 @@ examplepay-sdk</pre
   }
 
   @media (max-width: 760px) {
+    .help-header {
+      position: static;
+    }
+
     .help-shell {
       padding: 16px 16px 48px;
     }

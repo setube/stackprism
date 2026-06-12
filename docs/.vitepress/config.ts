@@ -49,6 +49,7 @@ export default defineConfig({
           items: [
             { text: '概述', link: '/dev/' },
             { text: '架构概览', link: '/dev/architecture' },
+            { text: 'Agent Bridge', link: '/dev/agent-bridge' },
             { text: '规则文件格式', link: '/dev/rule-format' },
             { text: '检测流程', link: '/dev/detection-flow' },
             { text: '贡献规则', link: '/dev/contribute-rules' },

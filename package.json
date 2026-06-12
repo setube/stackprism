@@ -10,7 +10,7 @@
     "build:injected": "node build-scripts/build-injected.mjs",
     "build": "pnpm run build:injected && vite build",
     "build:firefox": "pnpm run build && node build-scripts/package-firefox.mjs",
-    "test:unit": "node --test tests/*.test.mjs",
+    "test:unit": "node --test --test-timeout=60000 tests/*.test.mjs",
     "check:links": "node build-scripts/check-tech-links.mjs",
     "extract:icons": "node build-scripts/extract-wappalyzer-icons.mjs",
     "dev": "pnpm run build:injected && vite",

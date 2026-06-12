@@ -1,5 +1,6 @@
 import { loadStackPrismRules } from './rule-loader'
-import { normalizeSettings } from '@/utils/normalize-settings'
+import { sanitizeLogDetails } from './logging'
+import { normalizeSettings, normalizeSettingsWithLocalOptIn } from '@/utils/normalize-settings'
 
 export const SETTINGS_STORAGE_KEY = 'stackPrismSettings'
 
@@ -25,8 +26,19 @@ export const loadDetectorSettings = async () => {
   if (!detectorSettingsPromise) {
     detectorSettingsPromise = chrome.storage.sync
       .get(SETTINGS_STORAGE_KEY)
-      .then(stored => {
-        detectorSettingsCache = normalizeSettings(stored[SETTINGS_STORAGE_KEY])
+      .then(async stored => {
+        let local: Record<string, any> = {}
+        try {
+          local = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
+        } catch (caught) {
+          console.warn(
+            '[StackPrism] Failed to read local settings; using local defaults.',
+            SETTINGS_STORAGE_KEY,
+            sanitizeLogDetails({ error: caught })
+          )
+          local = {}
+        }
+        detectorSettingsCache = normalizeSettingsWithLocalOptIn(stored[SETTINGS_STORAGE_KEY], local[SETTINGS_STORAGE_KEY])
         return detectorSettingsCache
       })
       .catch(() => {
@@ -37,8 +49,8 @@ export const loadDetectorSettings = async () => {
   return detectorSettingsPromise
 }
 
-export const applyDetectorSettingsUpdate = (rawValue: unknown) => {
-  detectorSettingsCache = normalizeSettings(rawValue)
+export const applyDetectorSettingsUpdate = (syncValue: unknown, localValue: unknown = {}) => {
+  detectorSettingsCache = normalizeSettingsWithLocalOptIn(syncValue, localValue)
   detectorSettingsPromise = Promise.resolve(detectorSettingsCache)
   return detectorSettingsCache
 }

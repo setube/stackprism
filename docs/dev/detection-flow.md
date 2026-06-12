@@ -103,6 +103,49 @@ const runActivePageDetection = async tabId => {
 }
 ```
 
+## Agent Bridge 采集流程
+
+Agent Bridge 不复用弹窗按钮作为触发入口。它由本机 bridge 页面上的专用 content script 发起，background 在校验本机 opt-in、bridge 页面身份和 capture request 后，临时接管目标 tab 完成一次 site experience profile 采集。
+
+```text
+Agent 启动本机 bridge 脚本
+  ↓
+POST /v1/captures 创建 capture，得到一次性 bridgeUrl
+  ↓
+浏览器打开 http://127.0.0.1:{port}/bridge?... 页面
+  ↓
+agent-bridge-client.ts 校验 /bridge path、meta、session、capture、nonce、protocolVersion
+  ↓
+AGENT_BRIDGE_HELLO 发给 background
+  ↓
+background 校验 chrome.storage.local 中 agentBridgeEnabled 为 true
+  ↓
+bridge content script 读取 /v1/captures/{id}/request
+  ↓
+START_AGENT_CAPTURE 交给 background/agent-capture.ts
+  ↓
+打开或复用目标 tab，等待主 frame load 完成
+  ↓
+先把 finalUrl 写回 bridge，由 bridge server 执行最终 URL 策略校验
+  ↓
+finalUrl 通过后才运行技术检测和 experience-profiler
+  ↓
+profile 分片发回 bridge content script
+  ↓
+bridge content script 校验 chunk、sha256、session/capture/nonce 后同源 POST profile
+  ↓
+Agent 用 apiToken 读取 /v1/captures/{id}/profile
+```
+
+这个流程的关键边界：
+
+- `agentBridgeEnabled` 只从 `chrome.storage.local` 读取，sync 旧字段不能自动开启。
+- bridge tab、`/bridge` 页面和 `/v1/captures/*` 请求不写入普通 `tab-store`、popup 缓存、badge 或 dynamic snapshot。
+- bridge content script 不持有 `apiToken`；background 不持久化 `bridgeToken`。
+- `target_loaded` 的 final URL 被 bridge 接受前，不注入主动检测脚本或 experience profiler。
+- profile 回传走 bridge content script 同源 POST，不由 background 直接跨 origin fetch localhost。
+- 未完成 capture 的 deadline、tab ownership 和 cleanup 锚点写入 `chrome.storage.session`；service worker 重启后只能 fail closed，不伪造完成。
+
 ## 动态采集节流
 
 content-observer 端：

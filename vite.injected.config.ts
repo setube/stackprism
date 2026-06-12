@@ -3,7 +3,8 @@ import path from 'node:path'
 
 const ENTRIES = {
   'page-detector': 'src/injected/page-detector.ts',
-  'page-source-search': 'src/injected/page-source-search.ts'
+  'page-source-search': 'src/injected/page-source-search.ts',
+  'experience-profiler': 'src/injected/experience-profiler.ts'
 } as const
 
 type EntryName = keyof typeof ENTRIES
@@ -16,7 +17,7 @@ if (!ENTRIES[entryName]) {
 export default defineConfig({
   publicDir: false,
   build: {
-    outDir: 'public/injected',
+    outDir: process.env.INJECTED_OUT_DIR || 'public/injected',
     emptyOutDir: false,
     minify: 'esbuild',
     target: 'chrome120',

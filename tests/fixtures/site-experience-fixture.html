@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>StackPrism Experience Fixture</title>
+    <style>
+      :root {
+        --brand: #2255ff;
+      }
+
+      body {
+        margin: 0;
+        font-family: Inter, system-ui, sans-serif;
+        color: #101828;
+        background: #f7f9fc;
+      }
+
+      header {
+        position: sticky;
+        top: 0;
+        padding: 16px 24px;
+        background: white;
+        box-shadow: 0 4px 18px rgba(16, 24, 40, 0.12);
+      }
+
+      main {
+        padding: 32px;
+      }
+
+      .hero-card {
+        border-radius: 12px;
+        background: white;
+        padding: 24px;
+        transition:
+          transform 160ms ease,
+          box-shadow 160ms ease;
+      }
+
+      .hero-card:hover,
+      .hero-card:focus-within {
+        transform: translateY(-2px);
+      }
+
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 16px;
+        background: var(--brand);
+        color: white;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <nav><a href="/app?token=secret">Dashboard</a></nav>
+    </header>
+    <main>
+      <section class="hero-card">
+        <h1>运营概览</h1>
+        <p>联系 user@example.com 或 13800138000，订单 1234567890123，金额 ￥199。</p>
+        <button type="button">支付 ￥199 给 张三</button>
+      </section>
+      <table>
+        <tr>
+          <td><span class="badge">Live</span></td>
+        </tr>
+      </table>
+      <iframe src="https://example.org/embed"></iframe>
+    </main>
+    <footer>StackPrism</footer>
+  </body>
+</html>

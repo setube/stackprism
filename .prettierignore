@@ -1,4 +1,5 @@
 node_modules/
+!agent-skill/**/scripts/**
 dist/
 build/
 release/

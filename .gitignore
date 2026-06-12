@@ -1,6 +1,7 @@
 # Local dependencies and caches
 node_modules/
 .cache/
+cache/
 .parcel-cache/
 .vite/
 docs/.vitepress/cache/
@@ -15,6 +16,7 @@ release/
 releases/
 artifacts/
 public/injected/
+vite.config.ts.timestamp-*.mjs
 *.zip
 *.crx
 *.xpi
@@ -33,9 +35,15 @@ pnpm-debug.log*
 # Local-only scripts and scratch tools
 tools/
 scripts/
+!agent-skill/
+!agent-skill/**/
+!agent-skill/**/scripts/
+!agent-skill/**/scripts/**
 tmp/
 temp/
 *.local.*
+__pycache__/
+*.py[cod]
 
 # Editor and OS files
 .DS_Store

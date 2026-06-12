@@ -50,6 +50,13 @@ const MULTI_LABEL_SUFFIXES = new Set(
     .filter(Boolean)
 )
 
+const HOSTING_TENANT_SUFFIXES = `github.io vercel.app netlify.app pages.dev workers.dev webflow.io firebaseapp.com web.app
+  herokuapp.com fly.dev glitch.me repl.co replit.app surge.sh render.com onrender.com
+  railway.app up.railway.app azurewebsites.net cloudfront.net`
+  .split(/\s+/)
+  .filter(Boolean)
+  .sort((a, b) => b.split('.').length - a.split('.').length || b.length - a.length)
+
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/
 
 const isIpHost = (host: string): boolean => IPV4_RE.test(host) || host.includes(':')
@@ -62,6 +69,11 @@ export const getRegistrableDomain = (hostname: unknown): string => {
   if (!host || isIpHost(host)) return host
   const labels = host.split('.')
   if (labels.length <= 2) return host
+  for (const suffix of HOSTING_TENANT_SUFFIXES) {
+    const suffixLabels = suffix.split('.').length
+    if (host === suffix) return host
+    if (host.endsWith(`.${suffix}`)) return labels.slice(-(suffixLabels + 1)).join('.')
+  }
   const last2 = labels.slice(-2).join('.')
   if (MULTI_LABEL_SUFFIXES.has(last2)) return labels.slice(-3).join('.')
   return last2

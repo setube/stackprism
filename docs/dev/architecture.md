@@ -104,16 +104,16 @@ Chrome 扩展有四种执行环境，StackPrism 全部用上：
 
 8 种消息全部在 `src/types/messages.ts` 用 discriminated union 定义类型，所有调用走 `src/utils/messaging.ts` 的 `sendMessage<M>()` wrapper。
 
-| 消息                          | 方向          | 用途                                 |
-| ----------------------------- | ------------- | ------------------------------------ |
-| `GET_HEADER_DATA`             | popup → bg    | 拉取响应头记录                       |
-| `GET_POPUP_RESULT`            | popup → bg    | 拉取轻量缓存（弹窗主显示）           |
-| `GET_POPUP_RAW_RESULT`        | popup → bg    | 拉取完整 raw（原始线索 / 纠错反馈）  |
-| `GET_TECH_LINK`               | popup → bg    | 兜底查询某技术的官网链接             |
-| `START_BACKGROUND_DETECTION`  | popup → bg    | 「刷新」按钮触发主动检测             |
-| `GET_WORDPRESS_THEME_DETAILS` | bg internal   | 抓取主题 style.css header            |
-| `DYNAMIC_PAGE_SNAPSHOT`       | content → bg  | content script 持续上报动态快照      |
-| `PAGE_DETECTION_RESULT`       | injected → bg | page-detector 注入完返回结果         |
+| 消息                          | 方向          | 用途                                |
+| ----------------------------- | ------------- | ----------------------------------- |
+| `GET_HEADER_DATA`             | popup → bg    | 拉取响应头记录                      |
+| `GET_POPUP_RESULT`            | popup → bg    | 拉取轻量缓存（弹窗主显示）          |
+| `GET_POPUP_RAW_RESULT`        | popup → bg    | 拉取完整 raw（原始线索 / 纠错反馈） |
+| `GET_TECH_LINK`               | popup → bg    | 兜底查询某技术的官网链接            |
+| `START_BACKGROUND_DETECTION`  | popup → bg    | 「刷新」按钮触发主动检测            |
+| `GET_WORDPRESS_THEME_DETAILS` | bg internal   | 抓取主题 style.css header           |
+| `DYNAMIC_PAGE_SNAPSHOT`       | content → bg  | content script 持续上报动态快照     |
+| `PAGE_DETECTION_RESULT`       | injected → bg | page-detector 注入完返回结果        |
 
 ## 注入脚本的双轨问题
 

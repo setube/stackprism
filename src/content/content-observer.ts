@@ -1,5 +1,31 @@
 // @ts-nocheck
-;(() => {
+export const runContentObserver = () => {
+  const isStackPrismAgentBridgeUrl = () => {
+    if (location.protocol !== 'http:' || location.hostname !== '127.0.0.1' || location.pathname !== '/bridge') return false
+    const specs = {
+      session: /^s_[A-Za-z0-9_-]{22}$/,
+      capture: /^cap_[A-Za-z0-9_-]{22}$/,
+      nonce: /^n_[A-Za-z0-9_-]{22}$/
+    }
+    const values = {}
+    const parts = location.search.replace(/^\?/, '').split('&').filter(Boolean)
+    if (parts.length !== 3) return false
+    for (const part of parts) {
+      const separatorIndex = part.indexOf('=')
+      if (separatorIndex <= 0 || part.indexOf('=', separatorIndex + 1) !== -1) return false
+      const name = part.slice(0, separatorIndex)
+      const value = part.slice(separatorIndex + 1)
+      const spec = specs[name]
+      if (!spec || values[name] !== undefined || !spec.test(value)) return false
+      values[name] = value
+    }
+    return Boolean(values.session && values.capture && values.nonce)
+  }
+
+  if (isStackPrismAgentBridgeUrl()) {
+    return
+  }
+
   const MAX_ITEMS = 300
   const MAX_DOM_MARKERS = 120
   const MAX_MUTATION_COUNT = 5000
@@ -685,4 +711,8 @@
     }
     stopObserver({ keepErrorGuards: true })
   }
-})()
+}
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof chrome !== 'undefined') {
+  runContentObserver()
+}

@@ -10,5 +10,5 @@ for (const [src, dst] of targets) {
   const dstPath = resolve(root, dst)
   mkdirSync(dirname(dstPath), { recursive: true })
   copyFileSync(srcPath, dstPath)
-  console.log(`synced ${src} → ${dst}`)
+  console.log(`synced ${src} -> ${dst}`)
 }

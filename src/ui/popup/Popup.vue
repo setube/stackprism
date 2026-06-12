@@ -5,6 +5,16 @@
         <h1>
           <a class="app-title-link" :href="REPOSITORY_URL" target="_blank" rel="noreferrer" @click="openRepository">栈棱镜</a>
           <span v-if="version" class="version-badge">v{{ version }}</span>
+          <span
+            v-if="agentBridgeEnabled"
+            class="agent-bridge-badge"
+            :class="{ warning: state.settings.agentBridgeAllowAllNetworkTargets }"
+            :title="agentBridgeBadgeTitle"
+            :aria-label="agentBridgeBadgeTitle"
+          >
+            <Bot :size="12" :stroke-width="2.2" />
+            <span>{{ agentBridgeBadgeLabel }}</span>
+          </span>
         </h1>
         <p class="url">{{ pageUrl }}</p>
       </div>
@@ -20,7 +30,7 @@
         <RippleButton class="icon-btn" title="复制当前页 URL" @click="copyResult">
           <Copy :size="16" :stroke-width="2" />
         </RippleButton>
-        <RippleButton class="icon-btn primary" variant="primary" title="重新检测" @click="runDetection({ force: true })">
+        <RippleButton class="icon-btn refresh-btn" title="重新检测" @click="runDetection({ force: true })">
           <RefreshCw :size="16" :stroke-width="2" />
         </RippleButton>
       </div>
@@ -301,6 +311,7 @@
   import {
     ArrowUp,
     Ban,
+    Bot,
     ClipboardList,
     Copy,
     Download,
@@ -325,7 +336,7 @@
   import TechChip from '@/ui/components/TechChip.vue'
   import { categoryIndex, confidenceClass, confidenceRank } from '@/utils/category-order'
   import { applyCustomCss } from '@/utils/apply-custom-css'
-  import { normalizeSettings } from '@/utils/normalize-settings'
+  import { normalizeSettings, normalizeSettingsWithLocalOptIn } from '@/utils/normalize-settings'
   import { buildCorrectionIssueUrl } from '@/utils/build-issue-url'
   import {
     CACHE_REFRESH_DELAYS,
@@ -382,7 +393,7 @@
     if (footerPanel.value !== 'raw') return ''
     const ctx = rawSourceContext.value
     if (!ctx) return '原始线索'
-    return `原始线索 · ${ctx.tech?.name || ''} · ${ctx.source}`
+    return `原始线索 - ${ctx.tech?.name || ''} - ${ctx.source}`
   })
 
   const footerPanelTitle = computed(() => {
@@ -534,6 +545,11 @@
   const animatedTotal = useAnimatedCounter(totalCount)
   const animatedResource = useAnimatedCounter(resourceCount)
   const animatedHeader = useAnimatedCounter(headerCount)
+  const agentBridgeEnabled = computed(() => state.settings.agentBridgeEnabled === true)
+  const agentBridgeBadgeLabel = computed(() => (state.settings.agentBridgeAllowAllNetworkTargets ? '网络放开' : 'Bridge 开启'))
+  const agentBridgeBadgeTitle = computed(() =>
+    state.settings.agentBridgeAllowAllNetworkTargets ? 'Agent Bridge 已开启，所有网络目标已放开' : 'Agent Bridge 已开启'
+  )
 
   const focusCount = computed(() => {
     if (!state.result?.technologies?.length) return 0
@@ -559,7 +575,7 @@
   })
 
   const categoryFilterOptions = computed(() =>
-    tabItems.value.map(item => ({ value: item.category, label: `${item.category} · ${item.count}` }))
+    tabItems.value.map(item => ({ value: item.category, label: `${item.category} - ${item.count}` }))
   )
 
   const categoryFilterValue = computed({
@@ -607,8 +623,11 @@
 
   const loadSettings = async () => {
     try {
-      const stored = await chrome.storage.sync.get(SETTINGS_STORAGE_KEY)
-      return normalizeSettings(stored[SETTINGS_STORAGE_KEY])
+      const [stored, local] = await Promise.all([
+        chrome.storage.sync.get(SETTINGS_STORAGE_KEY).catch(() => ({}) as Record<string, unknown>),
+        chrome.storage.local.get(SETTINGS_STORAGE_KEY).catch(() => ({}) as Record<string, unknown>)
+      ])
+      return normalizeSettingsWithLocalOptIn(stored[SETTINGS_STORAGE_KEY], local[SETTINGS_STORAGE_KEY])
     } catch {
       return normalizeSettings()
     }
@@ -942,8 +961,8 @@
     const techName = String(tech?.name || '').toLowerCase()
     const matchTech = (item: any) => String(item?.name || '').toLowerCase() === techName
     const trimmed = String(source || '').trim()
-    const isHeaderApi = /·\s*api/i.test(trimmed)
-    const isHeaderFrame = /·\s*iframe/i.test(trimmed)
+    const isHeaderApi = /(?:-|\u00b7)\s*api/i.test(trimmed)
+    const isHeaderFrame = /(?:-|\u00b7)\s*iframe/i.test(trimmed)
     const isDynamic = trimmed.startsWith('动态监控')
     const isBundle = trimmed.startsWith('JS 版权注释')
     const isHeader = !isHeaderApi && !isHeaderFrame && trimmed.startsWith('响应头')
@@ -1151,6 +1170,14 @@
   }
 
   const onStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, area: string) => {
+    if ((area === 'sync' || area === 'local') && SETTINGS_STORAGE_KEY in changes) {
+      loadSettings()
+        .then(settings => {
+          state.settings = settings
+          applyCustomCss(settings.customCss)
+        })
+        .catch(() => {})
+    }
     if (area !== 'session' || !state.currentTabId) return
     const popupKey = `popup:${state.currentTabId}`
     if (!(popupKey in changes)) return
@@ -1225,7 +1252,7 @@
     font-size: 16px;
     font-weight: 600;
     gap: 8px;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
     line-height: 1.2;
     margin: 0 0 4px;
   }
@@ -1247,7 +1274,39 @@
     color: var(--muted);
     font-size: 11px;
     font-weight: 500;
-    letter-spacing: 0.02em;
+    letter-spacing: 0;
+  }
+
+  .agent-bridge-badge {
+    align-items: center;
+    background: rgba(15, 118, 110, 0.1);
+    border: 1px solid rgba(15, 118, 110, 0.28);
+    border-radius: 999px;
+    color: var(--accent);
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 700;
+    gap: 4px;
+    height: 22px;
+    line-height: 1;
+    padding: 0 8px;
+
+    &.warning {
+      background: #fff7ed;
+      border-color: rgba(180, 83, 9, 0.28);
+      color: #9a3412;
+    }
+  }
+
+  :global(:root[data-theme='dark']) .agent-bridge-badge.warning {
+    color: #fbbf24;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .agent-bridge-badge.warning {
+      color: #fbbf24;
+    }
   }
 
   .url {
@@ -1268,13 +1327,14 @@
 
     button {
       background: transparent;
-      border: 0;
+      border: 1px solid transparent;
       border-radius: 5px;
       color: var(--muted);
       font-size: 12px;
-      padding: 5px 8px;
+      padding: 4px 7px;
       transition:
         background 0.15s ease,
+        border-color 0.15s ease,
         color 0.15s ease;
       white-space: nowrap;
 
@@ -1283,8 +1343,22 @@
         color: var(--accent);
       }
 
+      &.refresh-btn {
+        background: rgba(15, 118, 110, 0.08);
+        border-color: rgba(15, 118, 110, 0.2);
+        color: var(--accent);
+        font-weight: 600;
+
+        &:hover {
+          background: var(--accent-soft);
+          border-color: rgba(15, 118, 110, 0.34);
+          color: var(--accent);
+        }
+      }
+
       &.primary {
         background: var(--accent);
+        border-color: var(--accent);
         color: #ffffff;
         font-weight: 500;
 
@@ -1349,67 +1423,70 @@
       transform 0.2s ease;
   }
 
-  // summary：主指标加重，去三盒子，inline baseline 对齐
+  // summary：三个入口保持同一组控件感，active 只做轻量强调
   .summary {
-    align-items: baseline;
+    align-items: center;
     border-bottom: 1px solid var(--line);
     display: flex;
     flex-shrink: 0;
-    gap: 20px;
+    gap: 6px;
     margin: 0;
-    padding: 14px 16px;
+    padding: 12px 16px;
 
     > div,
     .summary-tile {
-      align-items: baseline;
-      background: transparent;
-      border: 0;
-      color: inherit;
-      cursor: default;
+      align-items: center;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--muted);
+      cursor: pointer;
       display: flex;
       font: inherit;
       gap: 6px;
       margin: 0;
-      padding: 0;
+      min-height: 34px;
+      padding: 5px 9px;
       text-align: left;
+      transition:
+        background 0.15s ease,
+        border-color 0.15s ease,
+        color 0.15s ease;
     }
 
     span {
       color: var(--text);
-      font-size: 16px;
+      font-size: 17px;
       font-variant-numeric: tabular-nums;
       font-weight: 600;
+      line-height: 1;
     }
 
     > div:first-child span,
     .summary-tile:first-child span {
       color: var(--accent);
-      font-size: 24px;
+      font-size: 18px;
       font-weight: 700;
-      letter-spacing: -0.02em;
+      letter-spacing: 0;
     }
 
     label {
       color: var(--muted);
       font-size: 12px;
+      line-height: 1.1;
     }
   }
 
   .summary-tile {
-    border-radius: 4px;
-    cursor: pointer;
-    margin: -2px -6px;
-    padding: 2px 6px;
-    transition:
-      background 0.15s ease,
-      color 0.15s ease;
-
     &:hover {
       background: var(--accent-soft);
+      border-color: rgba(15, 118, 110, 0.2);
     }
 
     &.active {
       background: var(--accent-soft);
+      border-color: rgba(15, 118, 110, 0.28);
+      box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.08);
       color: var(--accent);
 
       span {
@@ -1424,7 +1501,7 @@
     gap: 4px;
   }
 
-  // filter-bar：左侧 segment + 右侧分类下拉
+  // filter-bar: left segment + right category select
   .filter-bar {
     align-items: center;
     border-bottom: 1px solid var(--line);
@@ -1439,8 +1516,10 @@
     background: var(--bg);
     border: 1px solid var(--line);
     border-radius: 6px;
+    align-items: center;
     display: inline-flex;
     flex: 0 0 auto;
+    min-height: 34px;
     padding: 2px;
   }
 
@@ -1454,7 +1533,8 @@
     display: inline-flex;
     font-size: 12px;
     gap: 6px;
-    padding: 4px 10px;
+    min-height: 28px;
+    padding: 5px 10px;
     transition:
       background 0.15s ease,
       color 0.15s ease;
@@ -1559,7 +1639,7 @@
     transform: scale(0.8) translateY(8px);
   }
 
-  // sections 切换淡入，从无→有数据 / 切分类时整体过渡
+  // sections transition for first data load and category switches
   .sections-fade-enter-active,
   .sections-fade-leave-active {
     transition:
@@ -1624,26 +1704,30 @@
   // 单个技术 chip:色块图标 + 名字
   .tech-row {
     align-items: center;
-    background: transparent;
-    border: 0;
+    background: var(--panel);
+    border: 1px solid transparent;
     border-radius: 5px;
     color: var(--text);
     cursor: pointer;
     display: inline-flex;
     font: inherit;
     gap: 6px;
+    min-height: 28px;
     padding: 4px 8px;
     text-align: left;
-    transition: background 0.15s ease;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
 
     &:hover {
       background: var(--accent-soft);
+      border-color: rgba(15, 118, 110, 0.18);
     }
 
     &:focus-visible {
       background: var(--accent-soft);
-      outline: 2px solid var(--accent);
-      outline-offset: -2px;
+      border-color: var(--accent);
+      outline: none;
     }
   }
 
@@ -1865,7 +1949,7 @@
       color: var(--text);
       font-size: 15px;
       font-weight: 600;
-      letter-spacing: -0.01em;
+      letter-spacing: 0;
       margin: 0 0 6px;
       text-transform: none;
     }
@@ -1886,7 +1970,7 @@
     opacity: 0.75;
   }
 
-  // footer：toolbar 风格，左侧两个工具按钮 + 右侧 GitHub
+  // footer: toolbar layout, action buttons on the left and GitHub on the right
   .app-footer {
     align-items: center;
     backdrop-filter: saturate(180%) blur(8px);

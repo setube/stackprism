@@ -138,6 +138,13 @@ const minifyJsonAssets = (): Plugin => ({
 
 export default defineConfig({
   plugins: [vue(), crx({ manifest }), tsconfigPaths(), precompileRulesPlugin(), minifyJsonAssets()],
+  css: {
+    preprocessorOptions: {
+      scss: {
+        api: 'modern-compiler'
+      }
+    }
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

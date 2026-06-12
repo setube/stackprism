@@ -1,4 +1,5 @@
 import { mergeTechnologyRecords } from './merge'
+import { redactHeaderValue } from '@/utils/site-experience-redaction'
 import {
   createCollector,
   filterCustomRulesForTarget,
@@ -9,19 +10,6 @@ import {
 } from './rule-matcher'
 
 const MAX_API_RECORDS = 30
-
-const sanitizeHeaderValue = (name: string, value: string) => {
-  if (name !== 'set-cookie') {
-    return value
-  }
-
-  const cookieNames = String(value)
-    .split(/,\s*(?=[^;,=\s]+=)/)
-    .map(cookie => cookie.split('=')[0]?.trim())
-    .filter(Boolean)
-
-  return cookieNames.length ? cookieNames.join(', ') : '[redacted]'
-}
 
 const normalizeHeaders = (responseHeaders: any[]) => {
   const map: Record<string, string> = {}
@@ -48,7 +36,7 @@ const pickHeaders = (headers: Record<string, string>, interestingNames: string[]
   const picked: Record<string, string> = {}
   for (const name of interestingNames) {
     if (headers[name]) {
-      picked[name] = sanitizeHeaderValue(name, headers[name])
+      picked[name] = redactHeaderValue(name, headers[name])
     }
   }
   return picked
@@ -273,7 +261,7 @@ export const fetchMainHeadersFallback = async (url: string, headerRules: any, se
 const sanitizeAllHeaders = (headers: Record<string, string>) => {
   const out: Record<string, string> = {}
   for (const [name, value] of Object.entries(headers)) {
-    out[name] = sanitizeHeaderValue(name, value)
+    out[name] = redactHeaderValue(name, value)
   }
   return out
 }

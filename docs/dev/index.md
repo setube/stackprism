@@ -7,6 +7,7 @@
 - [架构概览](./architecture.md) — 项目目录结构、各模块职责、数据流
 - [规则文件格式](./rule-format.md) — `public/rules/` 下 JSON 怎么组织，nested groups + defaults 继承
 - [检测流程](./detection-flow.md) — 从 webRequest / 页面注入到弹窗渲染走过哪些环节
+- [Agent Bridge](./agent-bridge.md) — 本地 loopback bridge、扩展握手、profile 回传和信任边界
 - [贡献规则](./contribute-rules.md) — 怎么往内置规则集合加新技术
 - [构建与发布](./release.md) — 本地构建、打包、签 crx、发布工作流
 

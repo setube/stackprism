@@ -724,3 +724,8 @@ export const queueDynamicSnapshot = (tabId, snapshot) => {
 export const clearPendingDynamicSnapshot = tabId => {
   pendingDynamicSnapshots.delete(tabId)
 }
+
+export const clearDynamicSnapshotState = tabId => {
+  clearDynamicSnapshotTimer(tabId)
+  clearPendingDynamicSnapshot(tabId)
+}

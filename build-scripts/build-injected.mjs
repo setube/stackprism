@@ -6,9 +6,19 @@ import { fileURLToPath } from 'node:url'
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const root = resolve(__dirname, '..')
 
-const entries = ['page-detector', 'page-source-search']
+const allEntries = ['page-detector', 'page-source-search', 'experience-profiler']
+const requestedEntries = String(process.env.INJECTED_ENTRIES || '')
+  .split(',')
+  .map(entry => entry.trim())
+  .filter(Boolean)
+const entries = requestedEntries.length ? requestedEntries : allEntries
+const invalidEntries = entries.filter(entry => !allEntries.includes(entry))
+if (invalidEntries.length) {
+  console.error(`[build-injected] invalid INJECTED_ENTRIES: ${invalidEntries.join(', ')}`)
+  process.exit(1)
+}
 
-const outDir = resolve(root, 'public/injected')
+const outDir = resolve(root, process.env.INJECTED_OUT_DIR || 'public/injected')
 rmSync(outDir, { recursive: true, force: true })
 mkdirSync(outDir, { recursive: true })
 
@@ -17,8 +27,8 @@ for (const entry of entries) {
   const result = spawnSync('pnpm', ['exec', 'vite', 'build', '--config', 'vite.injected.config.ts'], {
     cwd: root,
     stdio: 'inherit',
-    env: { ...process.env, INJECTED_ENTRY: entry },
-    shell: true
+    shell: process.platform === 'win32',
+    env: { ...process.env, INJECTED_ENTRY: entry, INJECTED_OUT_DIR: outDir }
   })
   if (result.status !== 0) {
     process.exit(result.status ?? 1)

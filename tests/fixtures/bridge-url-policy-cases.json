@@ -1,0 +1,63 @@
+{
+  "publicHostname": {
+    "url": "https://Public.Example:443/app?view=one#frag",
+    "resolvedAddresses": ["93.184.216.34"],
+    "normalizedUrl": "https://public.example/app?view=one"
+  },
+  "privateHostname": {
+    "url": "https://dev.internal.example/dashboard",
+    "resolvedAddresses": ["192.168.10.20"],
+    "errorCode": "PRIVATE_NETWORK_TARGET_BLOCKED"
+  },
+  "mixedHostname": {
+    "url": "https://mixed.internal.example/dashboard",
+    "resolvedAddresses": ["93.184.216.34", "10.1.2.3"],
+    "errorCode": "PRIVATE_NETWORK_TARGET_BLOCKED"
+  },
+  "proxyReservedHostname": {
+    "url": "https://proxy-reserved.example/dashboard",
+    "resolvedAddresses": ["198.18.0.12"],
+    "normalizedUrl": "https://proxy-reserved.example/dashboard"
+  },
+  "proxyReservedIpLiteral": {
+    "url": "https://198.18.0.12/dashboard",
+    "errorCode": "PRIVATE_NETWORK_TARGET_BLOCKED"
+  },
+  "specialUseHostname": {
+    "url": "https://special-use.internal.example/dashboard",
+    "resolvedAddresses": [
+      "0.0.0.0",
+      "100.64.0.1",
+      "192.0.2.1",
+      "192.88.99.1",
+      "198.51.100.1",
+      "203.0.113.1",
+      "224.0.0.1",
+      "240.0.0.1",
+      "255.255.255.255"
+    ],
+    "errorCode": "PRIVATE_NETWORK_TARGET_BLOCKED"
+  },
+  "specialUseIpv6Hostname": {
+    "url": "https://special-use-v6.internal.example/dashboard",
+    "resolvedAddresses": ["::", "::ffff:100.64.0.1", "64:ff9b:1::1", "100::1", "2001:2::1", "2001:db8::1", "2002::1", "3fff::1", "ff00::1"],
+    "errorCode": "PRIVATE_NETWORK_TARGET_BLOCKED"
+  },
+  "publicSpecialUseExceptionHostname": {
+    "url": "https://public-special-exception.example/dashboard",
+    "resolvedAddresses": ["192.0.0.9", "192.0.0.10", "64:ff9b::1", "2001:1::1", "2001:3::1", "2001:4:112::1", "2001:20::1", "2001:30::1"],
+    "normalizedUrl": "https://public-special-exception.example/dashboard"
+  },
+  "credentialUrl": {
+    "url": "https://user:pass@example.com/dashboard",
+    "errorCode": "INVALID_REQUEST"
+  },
+  "selfTarget": {
+    "url": "http://127.0.0.1:17370/",
+    "errorCode": "BRIDGE_SELF_TARGET_BLOCKED"
+  },
+  "loopbackTarget": {
+    "url": "http://127.0.0.1:3000/",
+    "errorCode": "PRIVATE_NETWORK_TARGET_BLOCKED"
+  }
+}
