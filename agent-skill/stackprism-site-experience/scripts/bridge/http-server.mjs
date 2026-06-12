@@ -109,7 +109,7 @@ export const createBridgeServer = ({ port = 0, env = process.env, resolveHostnam
       if (!parsed.ok) return failParsedRequest(res, parsed)
       const normalized = await normalizeCaptureRequest(parsed.body, baseUrl, { resolveHostname })
       if (!normalized.ok) return fail(res, 400, normalized.code, normalized.message, normalized.details)
-      const created = store.create(normalized.request)
+      const created = await store.create(normalized.request)
       if (!created.ok) return fail(res, created.status, created.code, created.message, created.details)
       return json(res, 200, {
         id: created.capture.id,

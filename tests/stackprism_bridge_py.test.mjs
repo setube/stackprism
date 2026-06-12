@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +25,13 @@ const readBytes = async response => ({
   body: Buffer.from(await response.arrayBuffer()),
   headers: response.headers
 })
+
+const waitForFileSync = filePath => {
+  const deadline = Date.now() + 2000
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4))
+  while (!existsSync(filePath) && Date.now() < deadline) Atomics.wait(waitBuffer, 0, 0, 25)
+  assert.equal(existsSync(filePath), true, `expected file to exist: ${filePath}`)
+}
 
 const sensitiveFailedError = (ready, created, config) => {
   const sensitiveUrl = `${created.body.bridgeUrl}&token=secret&apiToken=${ready.apiToken}&bridgeToken=${config.bridgeToken}#frag`
@@ -666,12 +673,11 @@ print(json.dumps(results, sort_keys=True))
 
 test('python fallback open-browser helper validates env and URL before spawning', () => {
   const parsed = pythonOneShot(`
-import subprocess
 import stackprism_bridge_lib.open_browser as open_browser_module
-from stackprism_bridge_lib.open_browser import open_browser
+from stackprism_bridge_lib.open_browser import open_browser, windows_command_candidates
 
-def timeout_run(*args, **kwargs):
-    raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout"))
+def exploding_popen(*_args, **_kwargs):
+    raise RuntimeError("/Users/example/secret-browser failed")
 
 checks = {
     "nul_env": open_browser("http://127.0.0.1:1/bridge", {"STACKPRISM_BROWSER_OPEN_COMMAND": "bad\\0cmd"}),
@@ -680,21 +686,30 @@ checks = {
         {"STACKPRISM_BROWSER_OPEN_COMMAND": "python3", "STACKPRISM_BROWSER_OPEN_ARGS_JSON": json.dumps(["bad\\0arg"])},
     ),
     "invalid_url": open_browser("http://127.0.0.1:1/bridge\\nnext", {"STACKPRISM_BRIDGE_NO_OPEN": "1"}),
+    "credential_url": open_browser("http://user:pass@127.0.0.1:1/bridge", {"STACKPRISM_BRIDGE_NO_OPEN": "1"}),
     "invalid_scheme": open_browser("file:///tmp/stackprism.html", {"STACKPRISM_BRIDGE_NO_OPEN": "1"}),
     "missing_command": open_browser("http://127.0.0.1:1/bridge", {"STACKPRISM_BROWSER_OPEN_COMMAND": "/definitely/missing/stackprism-browser"}),
     "invalid_timeout": open_browser("http://127.0.0.1:1/bridge", {"STACKPRISM_BROWSER_OPEN_COMMAND": "python3", "STACKPRISM_BROWSER_OPEN_TIMEOUT_MS": "30001"}),
+    "open_failed": open_browser(
+        "http://127.0.0.1:1/bridge",
+        {"STACKPRISM_BROWSER_OPEN_COMMAND": "python3", "STACKPRISM_BROWSER_OPEN_ARGS_JSON": json.dumps(["-c", "import sys; sys.exit(7)"]), "STACKPRISM_BROWSER_OPEN_TIMEOUT_MS": "1000"},
+    ),
+    "windows_candidates": windows_command_candidates(r"C:\\Program Files\\Browser\\browser", {"PATHEXT": ".EXE;.CMD"}),
 }
-open_browser_module.subprocess.run = timeout_run
-checks["open_timeout"] = open_browser("http://127.0.0.1:1/bridge", {"STACKPRISM_BROWSER_OPEN_COMMAND": "python3"})
+open_browser_module.subprocess.Popen = exploding_popen
+checks["spawn_failed"] = open_browser("http://127.0.0.1:1/bridge", {"STACKPRISM_BROWSER_OPEN_COMMAND": "python3"})
 print(json.dumps({name: result for name, result in checks.items()}, sort_keys=True))
 `)
   assert.deepEqual(parsed.nul_env, [false, { reason: 'BRIDGE_INVALID_ENV', message: 'Browser open environment contains NUL.' }])
   assert.deepEqual(parsed.nul_json_args, [false, { reason: 'BRIDGE_INVALID_ENV', message: 'Browser open environment contains NUL.' }])
   assert.deepEqual(parsed.invalid_url, [false, { reason: 'invalid_url' }])
+  assert.deepEqual(parsed.credential_url, [false, { reason: 'invalid_url' }])
   assert.deepEqual(parsed.invalid_scheme, [false, { reason: 'invalid_scheme', allowed: ['http', 'https'] }])
   assert.deepEqual(parsed.missing_command, [false, { reason: 'command_not_found' }])
   assert.deepEqual(parsed.invalid_timeout, [false, { reason: 'invalid_open_timeout' }])
-  assert.deepEqual(parsed.open_timeout, [false, { reason: 'open_timeout' }])
+  assert.deepEqual(parsed.windows_candidates, ['C:\\Program Files\\Browser\\browser.EXE', 'C:\\Program Files\\Browser\\browser.CMD'])
+  assert.deepEqual(parsed.open_failed, [false, { reason: 'open_failed', exitCode: 7 }])
+  assert.deepEqual(parsed.spawn_failed, [false, { reason: 'spawn_failed' }])
 })
 
 test('python fallback open-browser helper appends bridge URL as one argv', () => {
@@ -713,6 +728,7 @@ print(json.dumps(open_browser(${JSON.stringify(bridgeUrl)}, {
 `)
 
     assert.deepEqual(parsed, [true, {}])
+    waitForFileSync(argvPath)
     assert.deepEqual(JSON.parse(readFileSync(argvPath, 'utf8')), [bridgeUrl])
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
@@ -731,6 +747,14 @@ checks = {
         "STACKPRISM_BROWSER_OPEN_COMMAND": "/usr/bin/google-chrome",
         "STACKPRISM_BROWSER_OPEN_ARGS_JSON": json.dumps(["--profile-directory=Default"]),
     }, "Linux"),
+    "windows_custom": resolve_browser_open_command({
+        "STACKPRISM_BROWSER_OPEN_COMMAND": r"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "STACKPRISM_BROWSER_OPEN_ARGS_JSON": json.dumps(["--profile-directory=Profile 2"]),
+    }, "Windows"),
+    "linux_firefox": resolve_browser_open_command({
+        "STACKPRISM_BROWSER_OPEN_COMMAND": "firefox",
+        "STACKPRISM_BROWSER_OPEN_ARGS_JSON": json.dumps(["-P", "stackprism-dev"]),
+    }, "Linux"),
 }
 print(json.dumps(checks, sort_keys=True))
 `)
@@ -739,6 +763,11 @@ print(json.dumps(checks, sort_keys=True))
   assert.deepEqual(parsed.windows, [true, { command: 'rundll32.exe', args: ['url.dll,FileProtocolHandler'] }])
   assert.deepEqual(parsed.linux, [true, { command: 'xdg-open', args: [] }])
   assert.deepEqual(parsed.custom, [true, { command: '/usr/bin/google-chrome', args: ['--profile-directory=Default'] }])
+  assert.deepEqual(parsed.windows_custom, [
+    true,
+    { command: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', args: ['--profile-directory=Profile 2'] }
+  ])
+  assert.deepEqual(parsed.linux_firefox, [true, { command: 'firefox', args: ['-P', 'stackprism-dev'] }])
 })
 
 test('python fallback bridge page has CSP nonce and script-safe config', async () => {
@@ -3431,6 +3460,22 @@ empty_lookup_request = {
     "viewports": [],
     "options": {"targetMode": "reuse_or_new_tab"},
 }
+compatible_ipv6_private_request = {
+    "url": "http://[::7f00:1]:3000/",
+    "mode": "experience",
+    "waitMs": 0,
+    "include": ["tech"],
+    "viewports": [],
+    "options": {"targetMode": "reuse_or_new_tab"},
+}
+compatible_ipv6_self_request = {
+    "url": "http://[::7f00:1]:17370/bridge",
+    "mode": "experience",
+    "waitMs": 0,
+    "include": ["tech"],
+    "viewports": [],
+    "options": {"targetMode": "reuse_or_new_tab", "allowPrivateNetworkTarget": True},
+}
 
 def resolver(hostname):
     if hostname == "public.example":
@@ -3473,6 +3518,8 @@ proxy_reserved_ip_literal_normalized, proxy_reserved_ip_literal_code, proxy_rese
 special_use_normalized, special_use_code, special_use_details, special_use_message = normalize_capture_request(special_use_request, "http://127.0.0.1:17370", resolver)
 failed_lookup_normalized, failed_lookup_code, failed_lookup_details, failed_lookup_message = normalize_capture_request(failed_lookup_request, "http://127.0.0.1:17370", failed_resolver)
 empty_lookup_normalized, empty_lookup_code, empty_lookup_details, empty_lookup_message = normalize_capture_request(empty_lookup_request, "http://127.0.0.1:17370", empty_resolver)
+compatible_ipv6_private_normalized, compatible_ipv6_private_code, compatible_ipv6_private_details, compatible_ipv6_private_message = normalize_capture_request(compatible_ipv6_private_request, "http://127.0.0.1:17370", resolver)
+compatible_ipv6_self_normalized, compatible_ipv6_self_code, compatible_ipv6_self_details, compatible_ipv6_self_message = normalize_capture_request(compatible_ipv6_self_request, "http://127.0.0.1:17370", resolver)
 special_use_results = [
     normalize_with_single_address(special_use_request, address)
     for address in ${JSON.stringify(urlPolicyCases.specialUseHostname.resolvedAddresses)}
@@ -3515,6 +3562,14 @@ print(json.dumps({
     "emptyLookupCode": empty_lookup_code,
     "emptyLookupDetails": empty_lookup_details,
     "emptyLookupMessage": empty_lookup_message,
+    "compatibleIpv6PrivateNormalized": compatible_ipv6_private_normalized,
+    "compatibleIpv6PrivateCode": compatible_ipv6_private_code,
+    "compatibleIpv6PrivateDetails": compatible_ipv6_private_details,
+    "compatibleIpv6PrivateMessage": compatible_ipv6_private_message,
+    "compatibleIpv6SelfNormalized": compatible_ipv6_self_normalized,
+    "compatibleIpv6SelfCode": compatible_ipv6_self_code,
+    "compatibleIpv6SelfDetails": compatible_ipv6_self_details,
+    "compatibleIpv6SelfMessage": compatible_ipv6_self_message,
     "specialUseResults": special_use_results,
     "publicExceptionResults": public_exception_results,
 }, sort_keys=True))
@@ -3552,6 +3607,11 @@ print(json.dumps({
   assert.equal(parsed.emptyLookupNormalized, null)
   assert.equal(parsed.emptyLookupCode, 'TARGET_DNS_LOOKUP_FAILED')
   assert.equal(parsed.emptyLookupDetails.reason, 'dns_lookup_failed')
+  assert.equal(parsed.compatibleIpv6PrivateNormalized, null)
+  assert.equal(parsed.compatibleIpv6PrivateCode, 'PRIVATE_NETWORK_TARGET_BLOCKED')
+  assert.equal(parsed.compatibleIpv6PrivateDetails.reason, 'private_network_address')
+  assert.equal(parsed.compatibleIpv6SelfNormalized, null)
+  assert.equal(parsed.compatibleIpv6SelfCode, 'BRIDGE_SELF_TARGET_BLOCKED')
   for (const result of parsed.specialUseResults) {
     assert.equal(result.normalizedUrl, null, result.address)
     assert.equal(result.code, urlPolicyCases.specialUseHostname.errorCode, result.address)

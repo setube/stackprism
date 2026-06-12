@@ -58,13 +58,9 @@ const publicIpExceptionBlockList = createBlockList({
 export const isPrivateIpLiteral = hostname => {
   const host = hostname.replace(/^\[|\]$/g, '')
   const lowerHost = host.toLowerCase()
+  const embeddedIpv4Host = normalizeEmbeddedIpv4Host(lowerHost)
+  if (embeddedIpv4Host !== lowerHost) return isPrivateIpLiteral(embeddedIpv4Host)
   if (lowerHost === 'localhost') return true
-  if (lowerHost.startsWith('::ffff:')) {
-    return isPrivateIpLiteral(mappedIpv4Address(lowerHost.slice('::ffff:'.length)))
-  }
-  if (lowerHost.startsWith('0:0:0:0:0:ffff:')) {
-    return isPrivateIpLiteral(mappedIpv4Address(lowerHost.slice('0:0:0:0:0:ffff:'.length)))
-  }
   if (net.isIP(host) === 4) return isPrivateIpv4Literal(host)
   if (net.isIP(host) === 6) return isPrivateIpv6Literal(lowerHost)
   return false
@@ -72,10 +68,9 @@ export const isPrivateIpLiteral = hostname => {
 
 export const isProxyReservedIpLiteral = hostname => {
   const host = hostname.replace(/^\[|\]$/g, '')
+  const embeddedIpv4Host = normalizeEmbeddedIpv4Host(host)
+  if (embeddedIpv4Host !== host.toLowerCase()) return isProxyReservedIpLiteral(embeddedIpv4Host)
   if (net.isIP(host) === 4) return proxyReservedIpBlockList.check(host, 'ipv4')
-  const lowerHost = host.toLowerCase()
-  if (lowerHost.startsWith('::ffff:')) return isProxyReservedIpLiteral(mappedIpv4Address(lowerHost.slice('::ffff:'.length)))
-  if (lowerHost.startsWith('0:0:0:0:0:ffff:')) return isProxyReservedIpLiteral(mappedIpv4Address(lowerHost.slice('0:0:0:0:0:ffff:'.length)))
   return false
 }
 
@@ -96,12 +91,26 @@ const mappedIpv4Address = value => {
   return [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.')
 }
 
+const normalizeEmbeddedIpv4Host = value => {
+  const host = value.toLowerCase()
+  if (host.startsWith('::ffff:')) return mappedIpv4Address(host.slice('::ffff:'.length))
+  if (host.startsWith('0:0:0:0:0:ffff:')) return mappedIpv4Address(host.slice('0:0:0:0:0:ffff:'.length))
+  if (!host.startsWith('::')) return host
+  const mapped = mappedIpv4Address(host.slice(2))
+  return mapped.includes('.') ? mapped : host
+}
+
 export const isIpLiteral = hostname => net.isIP(hostname.replace(/^\[|\]$/g, '')) !== 0
 const effectivePort = parsed => parsed.port || (parsed.protocol === 'http:' ? '80' : parsed.protocol === 'https:' ? '443' : '')
 
-const isBridgeLoopbackAlias = (hostname, bridgeHostname) => {
+const normalizeBridgeLoopbackHost = hostname => {
   const host = hostname.replace(/^\[|\]$/g, '').toLowerCase()
-  const bridgeHost = bridgeHostname.replace(/^\[|\]$/g, '').toLowerCase()
+  return normalizeEmbeddedIpv4Host(host)
+}
+
+const isBridgeLoopbackAlias = (hostname, bridgeHostname) => {
+  const host = normalizeBridgeLoopbackHost(hostname)
+  const bridgeHost = normalizeBridgeLoopbackHost(bridgeHostname)
   if (host === bridgeHost) return true
   if (bridgeHost !== '127.0.0.1') return false
   return host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1'

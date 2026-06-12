@@ -59,6 +59,8 @@ def parse_ip_address(hostname):
             return None
     if getattr(address, "ipv4_mapped", None):
         address = address.ipv4_mapped
+    elif address.version == 6 and address.packed.startswith(b"\x00" * 12) and int(address) > 0xFFFF:
+        address = ipaddress.ip_address(address.packed[-4:])
     return address
 
 

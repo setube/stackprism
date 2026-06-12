@@ -52,6 +52,13 @@ const readBytes = async response => ({
   headers: response.headers
 })
 
+const waitForFileSync = filePath => {
+  const deadline = Date.now() + 2000
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4))
+  while (!existsSync(filePath) && Date.now() < deadline) Atomics.wait(waitBuffer, 0, 0, 25)
+  assert.equal(existsSync(filePath), true, `expected file to exist: ${filePath}`)
+}
+
 const createClassList = () => {
   const values = new Set()
   return {
@@ -1816,14 +1823,14 @@ test('js bridge rejects connections beyond the configured active connection limi
   )
 })
 
-test('capture store can actively prune expired completed profiles', () => {
+test('capture store can actively prune expired completed profiles', async () => {
   let now = 1000
   const store = new CaptureStore({
     baseUrl: 'http://127.0.0.1:17370',
     openBrowser: () => ({ ok: true }),
     now: () => now
   })
-  const created = store.create(baseCaptureRequest)
+  const created = await store.create(baseCaptureRequest)
   assert.equal(created.ok, true)
   store.markProfile(created.capture, profileFor(created.capture.id))
   assert.equal(created.capture.status, 'completed')
@@ -1852,7 +1859,7 @@ test('capture store actively expires completed profiles without a later request'
       timer.cleared = true
     }
   })
-  const created = store.create(baseCaptureRequest)
+  const created = await store.create(baseCaptureRequest)
   assert.equal(created.ok, true)
   store.markProfile(created.capture, profileFor(created.capture.id))
   assert.equal(scheduled.length, 1)
@@ -1866,21 +1873,21 @@ test('capture store actively expires completed profiles without a later request'
   assert.equal(created.capture.error.code, 'CAPTURE_RESULT_EXPIRED')
 })
 
-test('capture store distinguishes extension, target load, and running timeouts', () => {
+test('capture store distinguishes extension, target load, and running timeouts', async () => {
   let now = 1000
   const store = new CaptureStore({
     baseUrl: 'http://127.0.0.1:17370',
     openBrowser: () => ({ ok: true }),
     now: () => now
   })
-  const queued = store.create(baseCaptureRequest).capture
+  const queued = (await store.create(baseCaptureRequest)).capture
   now = queued.extensionDeadlineAt + 1
   store.pruneExpiredResults()
   assert.equal(queued.status, 'failed')
   assert.equal(queued.error.code, 'EXTENSION_NOT_CONNECTED')
 
   now = 2000
-  const targetOpening = store.create(baseCaptureRequest).capture
+  const targetOpening = (await store.create(baseCaptureRequest)).capture
   targetOpening.status = 'running'
   targetOpening.phase = 'target_opening'
   assert.equal(targetOpening.deadlineAt - targetOpening.createdAt, 95000)
@@ -1890,7 +1897,7 @@ test('capture store distinguishes extension, target load, and running timeouts',
   assert.equal(targetOpening.error.code, 'TARGET_LOAD_TIMEOUT')
 
   now = 3000
-  const running = store.create(baseCaptureRequest).capture
+  const running = (await store.create(baseCaptureRequest)).capture
   running.status = 'running'
   running.phase = 'profiling_experience'
   now = running.deadlineAt + 1
@@ -1962,7 +1969,7 @@ test('js bridge factory validates browser open environment before server bind', 
   )
 })
 
-test('js bridge open-browser helper validates parsed env before spawning', () => {
+test('js bridge open-browser helper validates parsed env before spawning', async () => {
   assert.deepEqual(parseOpenTimeoutMs({}), { ok: true, timeoutMs: 5000 })
   assert.deepEqual(parseOpenTimeoutMs({ STACKPRISM_BROWSER_OPEN_TIMEOUT_MS: '250' }), { ok: true, timeoutMs: 250 })
   assert.deepEqual(parseOpenTimeoutMs({ STACKPRISM_BROWSER_OPEN_TIMEOUT_MS: '99' }), {
@@ -1970,36 +1977,55 @@ test('js bridge open-browser helper validates parsed env before spawning', () =>
     details: { reason: 'invalid_open_timeout' }
   })
 
-  const result = openBrowser('http://127.0.0.1:1/bridge', {
+  const result = await openBrowser('http://127.0.0.1:1/bridge', {
     STACKPRISM_BROWSER_OPEN_COMMAND: process.execPath,
     STACKPRISM_BROWSER_OPEN_ARGS_JSON: JSON.stringify(['bad\0arg'])
   })
 
   assert.deepEqual(result, { ok: false, details: { reason: 'BRIDGE_INVALID_ENV', message: 'Browser open environment contains NUL.' } })
 
-  const invalidTimeout = openBrowser('http://127.0.0.1:1/bridge', {
+  const invalidTimeout = await openBrowser('http://127.0.0.1:1/bridge', {
     STACKPRISM_BROWSER_OPEN_COMMAND: process.execPath,
     STACKPRISM_BROWSER_OPEN_TIMEOUT_MS: '30001'
   })
   assert.deepEqual(invalidTimeout, { ok: false, details: { reason: 'invalid_open_timeout' } })
 
-  const invalidUrl = openBrowser('http://127.0.0.1:1/bridge\nnext', { STACKPRISM_BRIDGE_NO_OPEN: '1' })
+  const invalidUrl = await openBrowser('http://127.0.0.1:1/bridge\nnext', { STACKPRISM_BRIDGE_NO_OPEN: '1' })
   assert.deepEqual(invalidUrl, { ok: false, details: { reason: 'invalid_url' } })
+
+  const credentialUrl = await openBrowser('http://user:pass@127.0.0.1:1/bridge', { STACKPRISM_BRIDGE_NO_OPEN: '1' })
+  assert.deepEqual(credentialUrl, { ok: false, details: { reason: 'invalid_url' } })
+
+  const invalidScheme = await openBrowser('file:///tmp/stackprism.html', { STACKPRISM_BRIDGE_NO_OPEN: '1' })
+  assert.deepEqual(invalidScheme, { ok: false, details: { reason: 'invalid_scheme', allowed: ['http', 'https'] } })
+
+  const missingCommand = await openBrowser('http://127.0.0.1:1/bridge', {
+    STACKPRISM_BROWSER_OPEN_COMMAND: '/definitely/missing/stackprism-browser'
+  })
+  assert.deepEqual(missingCommand, { ok: false, details: { reason: 'command_not_found' } })
+
+  const openFailed = await openBrowser('http://127.0.0.1:1/bridge', {
+    STACKPRISM_BROWSER_OPEN_COMMAND: process.execPath,
+    STACKPRISM_BROWSER_OPEN_ARGS_JSON: JSON.stringify(['--input-type=module', '-e', 'process.exit(7)']),
+    STACKPRISM_BROWSER_OPEN_TIMEOUT_MS: '1000'
+  })
+  assert.deepEqual(openFailed, { ok: false, details: { reason: 'open_failed', exitCode: 7 } })
 })
 
-test('js bridge open-browser helper appends bridge URL as one argv', () => {
+test('js bridge open-browser helper appends bridge URL as one argv', async () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'stackprism-open-'))
   const argvPath = join(tempDir, 'argv.json')
   const bridgeUrl = 'http://127.0.0.1:17370/bridge?session=s&capture=c&nonce=n value"quote;&cmd=$(echo bad)'
   const script = "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))"
 
   try {
-    const result = openBrowser(bridgeUrl, {
+    const result = await openBrowser(bridgeUrl, {
       STACKPRISM_BROWSER_OPEN_COMMAND: process.execPath,
       STACKPRISM_BROWSER_OPEN_ARGS_JSON: JSON.stringify(['--input-type=module', '-e', script, argvPath])
     })
 
     assert.deepEqual(result, { ok: true })
+    waitForFileSync(argvPath)
     assert.deepEqual(JSON.parse(readFileSync(argvPath, 'utf8')), [bridgeUrl])
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
@@ -2026,6 +2052,34 @@ test('js bridge open-browser helper selects platform default opener without shel
       ok: true,
       command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       args: ['--profile-directory=Default']
+    }
+  )
+  assert.deepEqual(
+    resolveBrowserOpenCommand(
+      {
+        STACKPRISM_BROWSER_OPEN_COMMAND: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        STACKPRISM_BROWSER_OPEN_ARGS_JSON: JSON.stringify(['--profile-directory=Profile 2'])
+      },
+      'win32'
+    ),
+    {
+      ok: true,
+      command: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      args: ['--profile-directory=Profile 2']
+    }
+  )
+  assert.deepEqual(
+    resolveBrowserOpenCommand(
+      {
+        STACKPRISM_BROWSER_OPEN_COMMAND: 'firefox',
+        STACKPRISM_BROWSER_OPEN_ARGS_JSON: JSON.stringify(['-P', 'stackprism-dev'])
+      },
+      'linux'
+    ),
+    {
+      ok: true,
+      command: 'firefox',
+      args: ['-P', 'stackprism-dev']
     }
   )
 })
@@ -2907,6 +2961,16 @@ test('js bridge rejects cross-origin, private target, and self-target requests',
     assert.equal(privateTarget.status, 400)
     assert.equal(privateTarget.body.error.code, 'PRIVATE_NETWORK_TARGET_BLOCKED')
 
+    const compatibleIpv6PrivateTarget = await readJson(
+      await fetch(`${ready.baseUrl}/v1/captures`, {
+        method: 'POST',
+        headers: { ...auth(ready.apiToken), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...baseCaptureRequest, url: 'http://[::7f00:1]:3000/' })
+      })
+    )
+    assert.equal(compatibleIpv6PrivateTarget.status, 400)
+    assert.equal(compatibleIpv6PrivateTarget.body.error.code, 'PRIVATE_NETWORK_TARGET_BLOCKED')
+
     const selfTarget = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures`, {
         method: 'POST',
@@ -2934,6 +2998,22 @@ test('js bridge rejects cross-origin, private target, and self-target requests',
     )
     assert.equal(localhostSelfTarget.status, 400)
     assert.equal(localhostSelfTarget.body.error.code, 'BRIDGE_SELF_TARGET_BLOCKED')
+
+    for (const alias of ['2130706433', '127.1', '0x7f000001', '[::ffff:127.0.0.1]', '[::7f00:1]']) {
+      const aliasSelfTarget = await readJson(
+        await fetch(`${ready.baseUrl}/v1/captures`, {
+          method: 'POST',
+          headers: { ...auth(ready.apiToken), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...baseCaptureRequest,
+            url: ready.baseUrl.replace('127.0.0.1', alias),
+            options: { ...baseCaptureRequest.options, allowPrivateNetworkTarget: true }
+          })
+        })
+      )
+      assert.equal(aliasSelfTarget.status, 400, alias)
+      assert.equal(aliasSelfTarget.body.error.code, 'BRIDGE_SELF_TARGET_BLOCKED', alias)
+    }
 
     const crossOrigin = await readJson(
       await fetch(`${ready.baseUrl}/v1/captures`, {

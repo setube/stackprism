@@ -1,16 +1,30 @@
 import json
 import os
 import platform
+import shutil
 import subprocess
 from urllib.parse import urlparse
 
 
 DEFAULT_OPEN_TIMEOUT_SECONDS = 5
 MAX_OPEN_TIMEOUT_SECONDS = 30
+MAX_LAUNCH_PROBE_SECONDS = 1
+DEFAULT_WINDOWS_PATHEXT = ".COM;.EXE;.BAT;.CMD"
 
 
 def contains_nul(value):
     return isinstance(value, str) and "\0" in value or isinstance(value, list) and any(contains_nul(item) for item in value)
+
+
+def has_path_separator(value):
+    return "/" in value or "\\" in value
+
+
+def windows_command_candidates(command, env=os.environ):
+    extensions = [item for item in env.get("PATHEXT", DEFAULT_WINDOWS_PATHEXT).split(";") if item]
+    if any(command.lower().endswith(extension.lower()) for extension in extensions):
+        return [command]
+    return [f"{command}{extension}" for extension in extensions]
 
 
 def parse_open_timeout_seconds(env):
@@ -58,6 +72,23 @@ def resolve_browser_open_command(env=os.environ, system=None):
     return True, {"command": command, "args": args}
 
 
+def command_exists(command):
+    if has_path_separator(command):
+        if os.name == "nt":
+            return any(os.path.isfile(candidate) for candidate in windows_command_candidates(command))
+        return os.path.isfile(command) and os.access(command, os.X_OK)
+    return shutil.which(command) is not None
+
+
+def detached_popen_kwargs():
+    kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kwargs["start_new_session"] = True
+    return kwargs
+
+
 def open_browser(url, env=os.environ):
     ok, code, message = parse_open_config(env)
     if not ok:
@@ -67,6 +98,8 @@ def open_browser(url, env=os.environ):
     parsed_url = urlparse(url)
     if parsed_url.scheme.lower() not in ("http", "https"):
         return False, {"reason": "invalid_scheme", "allowed": ["http", "https"]}
+    if parsed_url.username or parsed_url.password:
+        return False, {"reason": "invalid_url"}
     if env.get("STACKPRISM_BRIDGE_NO_OPEN") == "1":
         return True, {"skipped": True}
 
@@ -78,17 +111,21 @@ def open_browser(url, env=os.environ):
         return False, timeout_details
     command = resolved["command"]
     args = resolved["args"]
+    if not command_exists(command):
+        return False, {"reason": "command_not_found"}
 
     try:
-        completed = subprocess.run([command, *args, url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout_seconds)
+        process = subprocess.Popen([command, *args, url], **detached_popen_kwargs())
+        try:
+            code = process.wait(timeout=min(timeout_seconds, MAX_LAUNCH_PROBE_SECONDS))
+        except subprocess.TimeoutExpired:
+            return True, {}
+        if code != 0:
+            return False, {"reason": "open_failed", "exitCode": code}
     except FileNotFoundError:
         return False, {"reason": "command_not_found"}
     except PermissionError:
         return False, {"reason": "permission_denied"}
-    except subprocess.TimeoutExpired:
-        return False, {"reason": "open_timeout"}
-    except Exception as exc:
-        return False, {"reason": "spawn_failed", "error": str(exc)}
-    if completed.returncode != 0:
-        return False, {"reason": "open_failed"}
+    except Exception:
+        return False, {"reason": "spawn_failed"}
     return True, {}

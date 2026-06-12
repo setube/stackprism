@@ -56,7 +56,7 @@ export class CaptureStore {
     return capture
   }
 
-  create(request) {
+  async create(request) {
     if (this.activeCount() > 0) {
       return { ok: false, status: 429, code: 'CAPTURE_BUSY', message: 'Another capture is already active.' }
     }
@@ -88,7 +88,7 @@ export class CaptureStore {
     capture.screenshotUrl = `${this.baseUrl}/v1/captures/${capture.id}/screenshot-download/${capture.screenshotDownloadId}`
     this.captures.set(capture.id, capture)
     this.pruneTerminalRecords()
-    const opened = this.openBrowser(capture.bridgeUrl)
+    const opened = await this.openBrowser(capture.bridgeUrl)
     if (!opened.ok) {
       capture.status = 'failed'
       capture.error = { code: 'BROWSER_OPEN_FAILED', message: 'Failed to open the bridge page.', details: opened.details || {} }

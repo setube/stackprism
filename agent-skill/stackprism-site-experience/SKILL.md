@@ -15,7 +15,7 @@ Use this skill proactively when the task involves:
 - Choosing implementation details from evidence: detected technologies, visual tokens, layout density, component patterns, interaction behavior, asset dependencies, and first-order UX structure.
 - Verifying that a target page's browser-observed facts match a design brief, audit claim, migration requirement, or Agent Bridge E2E claim.
 
-Do not use this skill for backend-only tasks, generic web search, SEO content extraction, login-protected private data capture, generic UI work with no target URL, or StackPrism internal source review unless the task actually needs a target URL Profile capture through Agent Bridge.
+Do not use this skill for backend-only tasks, generic web search, SEO content extraction, login-protected private data capture, generic UI work with no target URL, or StackPrism internal source review, refactor, or maintenance unless the task actually needs a target URL Profile capture through Agent Bridge.
 
 ## Preconditions
 
@@ -35,12 +35,12 @@ Do not run the helper or manual Bridge API against login-protected, account-spec
 Use this refusal template:
 
 ```text
-I cannot automatically capture that private or logged-in page with StackPrism. Please provide one of: a public demo URL, a desensitized test-environment URL, a user-supplied redacted screenshot or recording, a design brief, or an anonymized page-structure summary. I can use StackPrism only after the target is public or explicitly desensitized.
+I cannot automatically capture that private or logged-in page with StackPrism. Please provide a public demo URL, a desensitized test-environment URL, a design brief, or an anonymized page-structure summary. If you already have a redacted screenshot or recording with private content removed, you can provide it; do not create a new screenshot of the private page for this request. I can use StackPrism only after the target is public or explicitly desensitized.
 ```
 
-If the user provides a safe public demo or desensitized target, continue with the normal capture flow. Do not request screenshots for private pages, and do not add `--allow-private-network` as a workaround for privacy.
+If the user provides a safe public demo or desensitized target, continue with the normal capture flow. Do not request screenshots for private pages, do not ask the user to create screenshots for private pages, and do not add `--allow-private-network` as a workaround for privacy.
 
-If the user says the target is "the current browser page" but does not provide a URL, do not use `active_tab` or infer a target. Ask for a public or explicitly desensitized `http:` or `https:` URL first. Accept a user-provided redacted screenshot or recording only if the user has already removed private content; do not ask the user to create a screenshot of a private page for StackPrism capture.
+If the user says the target is "the current browser page" but does not provide a URL, do not use `active_tab` or infer a target. Ask for a public or explicitly desensitized `http:` or `https:` URL first. Accept a user-provided redacted screenshot or recording only if the user already has one and has removed private content; do not ask the user to create a screenshot of a private page for StackPrism capture.
 
 ## Preferred Capture Command
 
@@ -58,12 +58,12 @@ node agent-skill/stackprism-site-experience/scripts/capture-site.mjs \
 
 Set `STACKPRISM_BROWSER_OPEN_COMMAND` and `STACKPRISM_BROWSER_OPEN_ARGS_JSON` only when the default opener is not the browser/profile with StackPrism installed. On macOS, for example, use `STACKPRISM_BROWSER_OPEN_COMMAND=open` and `STACKPRISM_BROWSER_OPEN_ARGS_JSON='["-a","Google Chrome"]'` to force Chrome.
 
-For localhost or direct private-network development targets, use a full explicit command and record that the override was controlled:
+For localhost or direct private-network development targets, use a full explicit command and record that the override was controlled. Replace `<profile-directory-with-stackprism>` with the browser profile that actually has StackPrism installed; do not use `Default` unless the user confirms StackPrism is installed and enabled there.
 
 ```bash
 cd <repo-root>
 STACKPRISM_BROWSER_OPEN_COMMAND="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-STACKPRISM_BROWSER_OPEN_ARGS_JSON='["--profile-directory=Default"]' \
+STACKPRISM_BROWSER_OPEN_ARGS_JSON='["--profile-directory=<profile-directory-with-stackprism>"]' \
 node agent-skill/stackprism-site-experience/scripts/capture-site.mjs \
   --url http://127.0.0.1:5173/ \
   --allow-private-network \
@@ -91,18 +91,17 @@ If the helper exits with `CAPTURE_BUSY`, wait a few seconds, stop any bridge chi
 
 For large-page transfer failures, use a bounded retry ladder instead of inventing partial results. On `BRIDGE_TRANSPORT_DISCONNECTED`, `PROFILE_TRANSPORT_FAILED`, `PROFILE_CHUNK_MISSING`, `CAPTURE_TIMEOUT`, or `BRIDGE_REQUEST_TIMEOUT`, stop the old bridge child process and start a fresh helper.
 
-Retry attempts must preserve the original capture context exactly: the same `TARGET_URL`, same `STACKPRISM_BROWSER_OPEN_COMMAND`, same `STACKPRISM_BROWSER_OPEN_ARGS_JSON`, same browser/profile, and same target policy flags such as `--allow-private-network`. If the first command used command-prefix env assignments, repeat those same assignments on every reduced retry. If it used `--allow-private-network`, keep `STACKPRISM_CAPTURE_TARGET_FLAGS='--allow-private-network'` or include the flag directly on every reduced retry. The only intended retry changes are `--include`, `--max-resource-urls`, and the final `--no-screenshot` boundary.
+Retry attempts must preserve the original capture context exactly: the same `TARGET_URL`, same `STACKPRISM_BROWSER_OPEN_COMMAND`, same `STACKPRISM_BROWSER_OPEN_ARGS_JSON`, same browser/profile, and same target policy flags such as `--allow-private-network`. If the first command used command-prefix env assignments, repeat those same assignments on every reduced retry. If it used `--allow-private-network`, add that flag directly after `--url "$TARGET_URL"` on every reduced retry. The only intended retry changes are `--include`, `--max-resource-urls`, and the final `--no-screenshot` boundary.
 
 First keep visual evidence but reduce high-volume sections:
 
 ```bash
 cd <repo-root>
-# For public targets, leave STACKPRISM_CAPTURE_TARGET_FLAGS unset.
-# For original local/private attempts, set it to: --allow-private-network.
+# Public target form. For an original local/private attempt, add
+# --allow-private-network immediately after --url "$TARGET_URL".
 # Repeat any original STACKPRISM_BROWSER_OPEN_COMMAND/ARGS_JSON env prefix here.
 node agent-skill/stackprism-site-experience/scripts/capture-site.mjs \
   --url "$TARGET_URL" \
-  ${STACKPRISM_CAPTURE_TARGET_FLAGS:-} \
   --out /tmp/stackprism-profile-retry-1.json \
   --result-out /tmp/stackprism-result-retry-1.json \
   --screenshot-out /tmp/stackprism-screenshot-retry-1.jpg \
@@ -110,16 +109,16 @@ node agent-skill/stackprism-site-experience/scripts/capture-site.mjs \
   --max-resource-urls 150
 ```
 
-If that still fails and the user accepts losing screenshot evidence, run one final reduced non-visual attempt, then stop and report the remaining failure:
+If that still fails and the user explicitly accepts losing screenshot evidence, run one final reduced non-visual attempt, then stop and report the remaining failure. Do not run the final `--no-screenshot` retry until the user confirms that losing screenshot and visual evidence is acceptable, unless that approval is already stated in the current request.
 
 Before the final non-visual attempt, state this boundary explicitly: "I can retry without screenshot evidence, but the result can only support structural, technology, component, and limited UX findings; it cannot support visual parity or exact visual claims."
 
 ```bash
 cd <repo-root>
-# Preserve the same browser/profile env and STACKPRISM_CAPTURE_TARGET_FLAGS.
+# Preserve the same browser/profile env. If the original command used
+# --allow-private-network, add it immediately after --url "$TARGET_URL".
 node agent-skill/stackprism-site-experience/scripts/capture-site.mjs \
   --url "$TARGET_URL" \
-  ${STACKPRISM_CAPTURE_TARGET_FLAGS:-} \
   --out /tmp/stackprism-profile-retry-2.json \
   --result-out /tmp/stackprism-result-retry-2.json \
   --include tech,layout,components,ux \
@@ -169,6 +168,35 @@ Platform notes:
 - Firefox profiles: set `STACKPRISM_BROWSER_OPEN_COMMAND` to the Firefox executable and put profile arguments in `STACKPRISM_BROWSER_OPEN_ARGS_JSON`, for example `["-P","default-release"]` or `["--profile","/absolute/path/to/profile"]`. Do not pass the bridge URL in those args.
 - Windows default opener: command `rundll32.exe` with the built-in argument `url.dll,FileProtocolHandler`. To force Chrome or Edge, set `STACKPRISM_BROWSER_OPEN_COMMAND` to the full browser `.exe` path and put profile args such as `["--profile-directory=Default"]` in `STACKPRISM_BROWSER_OPEN_ARGS_JSON`.
 - Linux default opener: `xdg-open`. To force Chrome or Chromium, set `STACKPRISM_BROWSER_OPEN_COMMAND` to `google-chrome`, `chromium`, or the absolute executable path, and put profile args such as `["--profile-directory=Default"]` in `STACKPRISM_BROWSER_OPEN_ARGS_JSON`.
+
+Cross-platform explicit profile examples:
+
+Set environment variables with the syntax of the current shell; the examples below describe the values, not portable copy-paste shell assignments.
+
+- Windows Chrome: set `STACKPRISM_BROWSER_OPEN_COMMAND` to `C:\Program Files\Google\Chrome\Application\chrome.exe` with `STACKPRISM_BROWSER_OPEN_ARGS_JSON=["--profile-directory=<profile-directory-with-stackprism>"]`.
+- Windows Edge: use the full `msedge.exe` path and the same `--profile-directory=<profile-directory-with-stackprism>` args JSON.
+- Linux Chrome/Chromium: `STACKPRISM_BROWSER_OPEN_COMMAND=google-chrome` or `chromium` with `STACKPRISM_BROWSER_OPEN_ARGS_JSON=["--profile-directory=<profile-directory-with-stackprism>"]`.
+- Linux Firefox: `STACKPRISM_BROWSER_OPEN_COMMAND=firefox` with `STACKPRISM_BROWSER_OPEN_ARGS_JSON=["-P","<firefox-profile-with-stackprism>"]`.
+
+## Firefox E2E Validation
+
+For Firefox Agent Bridge E2E verification, require an exact safe public `http:` or `https:` smoke URL. If no exact safe public smoke URL is provided, ask for one; do not choose an arbitrary public page and do not use `https://example.com` as a default target.
+
+Use an explicit Firefox executable and profile so the bridge opens in the profile where StackPrism is installed:
+
+```bash
+cd <repo-root>
+STACKPRISM_BROWSER_OPEN_COMMAND="/Applications/Firefox.app/Contents/MacOS/firefox" \
+STACKPRISM_BROWSER_OPEN_ARGS_JSON='["-P","<firefox-profile-with-stackprism>"]' \
+node agent-skill/stackprism-site-experience/scripts/capture-site.mjs \
+  --url "$TARGET_URL" \
+  --out /tmp/stackprism-firefox-profile.json \
+  --result-out /tmp/stackprism-firefox-result.json \
+  --screenshot-out /tmp/stackprism-firefox-screenshot.jpg \
+  --include tech,visual,layout,components,interaction,ux,assets
+```
+
+If the profile is identified by path instead of name, use `STACKPRISM_BROWSER_OPEN_ARGS_JSON='["--profile","/absolute/path/to/firefox-profile"]'`. In the E2E manifest, set `browserName` to `Firefox` and set `profileIdentifier` to the exact `-P` profile name or `--profile` path label used for the run.
 
 ## Capture A Target
 
@@ -231,9 +259,9 @@ Use this public report template instead of pasting raw stdout:
 
 ```json
 {
-  "browserName": "Chrome",
+  "browserName": "<Chrome|Edge|Firefox>",
   "browserVersion": "recorded separately",
-  "profileIdentifier": "Default",
+  "profileIdentifier": "<profile-label-used-for-this-run>",
   "extensionVersion": "1.3.74",
   "agentBridgeEnabled": true,
   "targetUrl": "https://target.example/",
@@ -263,6 +291,8 @@ If browser/profile identity matters for the E2E claim, record one non-sensitive 
 ## Use The Profile
 
 - Read `limitations` first. Do not infer that a missing section means the site lacks that feature.
+- When the user asks for a recreation brief, read `references/agent-consumption-guide.md` and structure the brief from `agentGuidance.recreationPlan` plus screenshot-backed visual evidence when available.
+- Record the captured viewport names and dimensions in briefs and E2E notes. Do not infer mobile or responsive breakpoint behavior unless that viewport was captured or verified separately.
 - Start from `agentGuidance.recreationPlan`. Follow its `implementationOrder`, then map `designTokens`, `layoutBlueprint`, `componentInventory`, `interactionChecklist`, `uxChecklist`, `assetHints`, `visualReference`, and `verificationChecklist` into the target project.
 - Use `visualProfile.screenshot.downloadUrl` as an optional visual reference only when it is present and your model supports image input. The Profile JSON intentionally omits screenshot base64; download or open the image to see the actual visual effect, and do not use screenshots from login-protected or private pages because pixels are not redacted.
 - Treat `techProfile` as implementation guidance, not a mandate to copy the source site's private stack.

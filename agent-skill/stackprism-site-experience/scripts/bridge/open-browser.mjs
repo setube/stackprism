@@ -1,8 +1,59 @@
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { accessSync, constants, statSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 
 const DEFAULT_OPEN_TIMEOUT_MS = 5000
 const MAX_OPEN_TIMEOUT_MS = 30000
+const MAX_LAUNCH_PROBE_MS = 1000
 const containsNul = value => (typeof value === 'string' ? value.includes('\0') : Array.isArray(value) && value.some(containsNul))
+const hasPathSeparator = value => value.includes('/') || value.includes('\\')
+
+const commandCandidates = (command, env, platform) => {
+  const extensions = String(env.PATHEXT ?? process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD')
+    .split(';')
+    .filter(Boolean)
+  const lowerCommand = command.toLowerCase()
+  if (hasPathSeparator(command)) {
+    if (platform !== 'win32' || extensions.some(extension => lowerCommand.endsWith(extension.toLowerCase()))) return [command]
+    return extensions.map(extension => `${command}${extension}`)
+  }
+  const pathEntries = String(env.PATH ?? process.env.PATH ?? '').split(delimiter).filter(Boolean)
+  if (platform !== 'win32') return pathEntries.map(entry => join(entry, command))
+  return pathEntries.flatMap(entry =>
+    extensions.map(extension => {
+      const suffix = extension.toLowerCase()
+      return join(entry, lowerCommand.endsWith(suffix) ? command : `${command}${extension}`)
+    })
+  )
+}
+
+const commandExists = (command, env, platform) => {
+  const mode = platform === 'win32' ? constants.F_OK : constants.X_OK
+  for (const candidate of commandCandidates(command, env, platform)) {
+    try {
+      accessSync(candidate, mode)
+      if (!statSync(candidate).isFile()) continue
+      return true
+    } catch {}
+  }
+  return false
+}
+
+const validateOpenUrl = url => {
+  const value = String(url)
+  if (value.includes('\0') || value.includes('\n') || value.includes('\r')) return { ok: false, details: { reason: 'invalid_url' } }
+  let parsed
+  try {
+    parsed = new URL(value)
+  } catch {
+    return { ok: false, details: { reason: 'invalid_url' } }
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return { ok: false, details: { reason: 'invalid_scheme', allowed: ['http', 'https'] } }
+  }
+  if (parsed.username || parsed.password) return { ok: false, details: { reason: 'invalid_url' } }
+  return { ok: true }
+}
 
 export const parseOpenTimeoutMs = env => {
   const value = env.STACKPRISM_BROWSER_OPEN_TIMEOUT_MS
@@ -53,12 +104,34 @@ export const resolveBrowserOpenCommand = (env = process.env, platform = process.
   return { ok: true, command, args }
 }
 
-export const openBrowser = (url, env = process.env, platform = process.platform) => {
+const waitForLaunchProbe = (child, timeoutMs) =>
+  new Promise(resolve => {
+    let settled = false
+    const finish = result => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.off('error', onError)
+      child.off('exit', onExit)
+      resolve(result)
+    }
+    const onError = error => {
+      finish({ ok: false, details: { reason: error?.code === 'ENOENT' ? 'command_not_found' : 'spawn_failed' } })
+    }
+    const onExit = code => {
+      finish(code === 0 ? { ok: true } : { ok: false, details: { reason: 'open_failed', exitCode: code } })
+    }
+    const timer = setTimeout(() => finish({ ok: true }), Math.min(timeoutMs, MAX_LAUNCH_PROBE_MS))
+    timer.unref?.()
+    child.once('error', onError)
+    child.once('exit', onExit)
+  })
+
+export const openBrowser = async (url, env = process.env, platform = process.platform) => {
   const openConfig = parseOpenConfig(env)
   if (!openConfig.ok) return { ok: false, details: { reason: openConfig.code, message: openConfig.message } }
-  if (String(url).includes('\0') || String(url).includes('\n') || String(url).includes('\r')) {
-    return { ok: false, details: { reason: 'invalid_url' } }
-  }
+  const openUrl = validateOpenUrl(url)
+  if (!openUrl.ok) return openUrl
 
   if (env.STACKPRISM_BRIDGE_NO_OPEN === '1') return { ok: true, skipped: true }
 
@@ -67,12 +140,13 @@ export const openBrowser = (url, env = process.env, platform = process.platform)
   const timeout = parseOpenTimeoutMs(env)
   if (!timeout.ok) return { ok: false, details: timeout.details }
   const { command, args } = resolved
+  if (!commandExists(command, env, platform)) return { ok: false, details: { reason: 'command_not_found' } }
 
   try {
-    const child = spawnSync(command, [...args, url], { stdio: 'ignore', shell: false, timeout: timeout.timeoutMs })
-    if (child.error) return { ok: false, details: { reason: child.error.code === 'ETIMEDOUT' ? 'open_timeout' : 'spawn_failed' } }
-    if (child.status !== 0) return { ok: false, details: { reason: 'open_failed' } }
-    return { ok: true }
+    const child = spawn(command, [...args, url], { detached: true, stdio: 'ignore', shell: false })
+    const launched = await waitForLaunchProbe(child, timeout.timeoutMs)
+    child.unref()
+    return launched
   } catch {
     return { ok: false, details: { reason: 'spawn_failed' } }
   }
