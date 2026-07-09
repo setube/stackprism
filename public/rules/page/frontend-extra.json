@@ -678,6 +678,24 @@
             "patterns": ["snowpack|\\/_snowpack\\/"]
           }
         ]
+      },
+      {
+        "defaults": {
+          "category": "前端库",
+          "confidence": "高"
+        },
+        "rules": [
+          {
+            "name": "highlight.js",
+            "matchIn": ["html"],
+            "classPrefixes": ["hljs"]
+          },
+          {
+            "name": "tsparticles",
+            "matchIn": ["html"],
+            "selectors": ["canvas.tsparticles-canvas-el"]
+          }
+        ]
       }
     ]
   }
