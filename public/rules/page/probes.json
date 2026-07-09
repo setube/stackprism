@@ -93,7 +93,7 @@
           {
             "name": "Uptime Kuma",
             "kind": "可用性监控",
-            "patterns": ["Uptime Kuma", "uptime-kuma", "kuma", "status-page"]
+            "patterns": ["<title>\\s*Uptime Kuma\\b", "louislam/uptime-kuma", "/api/status-page/heartbeat", "/api/status-page/config"]
           },
           {
             "name": "Tianji",
@@ -287,7 +287,7 @@
           {
             "name": "Zabbix",
             "confidence": "高",
-            "patterns": ["Zabbix", "zabbix", "zbx_session", "jsLoader.php\\?ver="]
+            "patterns": ["zbx_session", "jsLoader\\.php\\?ver=", "zabbix\\.php\\?action=", "<title>[^<]*Zabbix[^<]*</title>"]
           },
           {
             "name": "Nagios",

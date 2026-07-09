@@ -26,16 +26,7 @@
         "rules": [
           {
             "name": "PHP",
-            "patterns": [
-              "\\.php(?:\\?|#|$)",
-              "index\\.php",
-              "phpsessid",
-              "PHPSESSID",
-              "laravel",
-              "symfony",
-              "thinkphp",
-              "discuz_uid"
-            ]
+            "patterns": ["\\.php(?:\\?|#|$)", "index\\.php", "phpsessid", "PHPSESSID", "laravel", "symfony", "thinkphp", "discuz_uid"]
           },
           {
             "name": "Python",
@@ -110,7 +101,7 @@
       {
         "name": "Lua / OpenResty",
         "kind": "后端脚本语言 / 网关运行时",
-        "patterns": ["openresty", "ngx_lua", "lua-resty", "x-lua"]
+        "patterns": ["<center>\\s*openresty(?:/[\\d.]+)?\\s*</center>", "openresty/[\\d.]+", "\\bngx_lua\\b", "\\blua-resty-"]
       },
       {
         "defaults": {
