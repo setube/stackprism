@@ -18,7 +18,10 @@
     "docs:assets": "node build-scripts/sync-docs-assets.mjs",
     "docs:dev": "bun run docs:assets && vitepress dev docs",
     "docs:build": "bun run docs:assets && vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "build:sdk": "node build-scripts/build-sdk.mjs",
+    "test:sdk": "node build-scripts/build-sdk.mjs && node --test tests/sdk/*.test.mjs",
+    "baseline:bing": "node build-scripts/build-sdk.mjs && node build-scripts/check-bing-baseline.mjs"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^3",
@@ -39,7 +42,8 @@
     "vite-tsconfig-paths": "^5",
     "vitepress": "^1.6.4",
     "vue": "^3.5.44",
-    "vue-tsc": "^3.3.13"
+    "vue-tsc": "^3.3.13",
+    "playwright-core": "1.64.1"
   },
   "dependencies": {
     "vue-i18n": "^11.4.14"

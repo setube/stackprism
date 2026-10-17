@@ -1,0 +1,33 @@
+{
+  "name": "@jacobinwwey/stackprism",
+  "version": "0.2.0",
+  "description": "StackPrism browser technology detection SDK and CLI",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/types/index.d.ts",
+  "bin": {
+    "stackprism": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "dependencies": {
+    "playwright-core": "1.64.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jacobinwwey/stackprism.git",
+    "directory": "packages/stackprism"
+  }
+}
