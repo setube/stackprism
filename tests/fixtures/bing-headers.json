@@ -1,0 +1,15 @@
+{
+  "source": "Observed on https://cn.bing.com/ on 2026-10-17; identifier values replaced; no cookies or query strings retained",
+  "responses": [
+    {
+      "url": "https://cn.bing.com/",
+      "headers": { "x-msedge-ref": "fixture-edge-id" },
+      "expected": ["Azure CDN / Front Door"]
+    },
+    {
+      "url": "https://cn.bing.com/web/xlsc.aspx",
+      "headers": { "x-msedge-ref": "fixture-edge-id" },
+      "expected": ["Azure CDN / Front Door", "ASP.NET"]
+    }
+  ]
+}

@@ -24,6 +24,8 @@
 
 ## Introduction
 
+An experimental [Node.js CLI and SDK](packages/stackprism/README.md) reuses the shared detector. Build with `bun run build:sdk`; the package is not yet published to npm.
+
 StackPrism is a **Manifest V3** browser extension for Chrome, Edge, and Firefox that identifies the tech stack used by any webpage.
 
 Unlike most similar tools that only scan HTML resource URLs, StackPrism runs 4 independent detection channels in parallel:

@@ -20,7 +20,8 @@
     "docs:build": "bun run docs:assets && vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "build:sdk": "node build-scripts/build-sdk.mjs",
-    "test:sdk": "node build-scripts/build-sdk.mjs && node --test tests/sdk/*.test.mjs"
+    "test:sdk": "node build-scripts/build-sdk.mjs && node --test tests/sdk/*.test.mjs",
+    "baseline:bing": "node build-scripts/build-sdk.mjs && node build-scripts/check-bing-baseline.mjs"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^3",

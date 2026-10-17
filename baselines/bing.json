@@ -1,0 +1,8 @@
+{
+  "id": "bing-home",
+  "url": "https://www.bing.com/",
+  "allowedHosts": ["www.bing.com", "cn.bing.com"],
+  "requiredTechnologies": ["HTTPS", "JavaScript", "Open Graph"],
+  "timeoutMs": 30000,
+  "observationMs": 1000
+}
