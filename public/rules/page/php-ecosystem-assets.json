@@ -478,7 +478,7 @@
                   "resourceHints": ["/modules/system/assets/", "/modules/backend/assets/", "/plugins/", "october"],
                   "patterns": [
                     "(?:^|/)modules/(?:system|backend|cms)/assets(?:/|[?#]|$)",
-                    "(?:^|/)plugins/[a-z0-9_-]+/[a-z0-9_-]+/assets(?:/|[?#]|$)",
+                    "(?:^|/)(?<!wp-content/)plugins/[a-z0-9_-]+/[a-z0-9_-]+/assets(?:/|[?#]|$)",
                     "october(?:cms)?[^\\s\"'<>]*\\.(?:js|css)(?:\\?|$)"
                   ]
                 },

@@ -148,7 +148,8 @@ export const createRuleListsScannerCache = (hintsOf: (rule: any) => string[] = a
 // 自定义规则等没进扫描器的 hint 也能查：直接在文本里找
 export const createTextHintLookup = (lowerText: string): HintLookup => createHintScanner([]).scan(lowerText)
 
-export const matchesCompiledRulePatterns = (rule: any, text: string): boolean => {
+// accept：正则命中后再确认这处命中能否作为证据（见 utils/resource-attribution）；不传只看是否命中
+export const matchesCompiledRulePatterns = (rule: any, text: string, accept?: (pattern: RegExp, text: string) => boolean): boolean => {
   if (!rule || !Array.isArray(rule.patterns) || !rule.patterns.length) {
     return false
   }
@@ -156,14 +157,17 @@ export const matchesCompiledRulePatterns = (rule: any, text: string): boolean =>
     const combined = getCompiledCombinedPattern(rule, rule.patterns)
     if (combined) {
       combined.lastIndex = 0
-      return combined.test(text)
+      return combined.test(text) && (!accept || accept(combined, text))
     }
     const value = String(text || '').toLowerCase()
-    return rule.patterns.some((pattern: string) => value.includes(String(pattern || '').toLowerCase()))
+    return rule.patterns.some(
+      (pattern: string) =>
+        value.includes(String(pattern || '').toLowerCase()) && (!accept || accept(compileRulePattern(pattern, rule), text))
+    )
   }
   return getCompiledRulePatterns(rule, rule.patterns).some(pattern => {
     pattern.lastIndex = 0
-    return pattern.test(text)
+    return pattern.test(text) && (!accept || accept(pattern, text))
   })
 }
 

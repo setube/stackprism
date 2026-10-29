@@ -507,7 +507,7 @@
               "name": "Symphony",
               "kind": "Java 社区论坛",
               "url": "https://github.com/88250/symphony",
-              "patterns": ["symphonyLabel\\s*:\\s*[\"']", "href=[\"']https://github\\.com/88250/symphony[\"']"],
+              "patterns": ["symphonyLabel\\s*:\\s*[\"']"],
               "matchIn": ["html"]
             },
             {
@@ -743,7 +743,11 @@
               "name": "Hashnode",
               "confidence": "中",
               "url": "https://hashnode.com",
-              "patterns": ["^https?://cdn\\.hashnode\\.com/(?:res/hashnode|uploads)/", "^https?://[^/]+\\.hashnode\\.dev/"]
+              "patterns": [
+                "^https?://cdn\\.hashnode\\.com/(?:res/hashnode|uploads)/",
+                "^https?://[^/]+\\.hashnode\\.dev/",
+                "^https?://ping\\.hashnode\\.com/"
+              ]
             },
             {
               "name": "Tistory",

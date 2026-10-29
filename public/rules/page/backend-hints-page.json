@@ -34,7 +34,7 @@
         {
           "name": "Flask",
           "confidence": "低",
-          "patterns": ["flask(?:\\.min)?\\.js|csrf_token\\(\\)|\\/static\\/.*flask"]
+          "patterns": ["flask(?:\\.min)?\\.js|csrf_token\\(\\)|\\/static\\/[^\\s\"'<>]*flask"]
         },
         {
           "name": "Laravel",

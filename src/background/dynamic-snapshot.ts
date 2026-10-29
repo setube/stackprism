@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { safeDecodeURIComponent } from '@/utils/url'
 import { isDetectablePageUrl } from '@/utils/page-support'
+import { attributionPolicyOf, createResourceAttribution, hasAttributedMatch } from '@/utils/resource-attribution'
 import { mergeTechnologyRecords, normalizeDynamicFallbackTechName, shortHeaderUrl } from './merge'
 import {
   createCollector,
@@ -483,8 +484,9 @@ const matchDynamicFrontendLookup = (rule, context, defaultCategory) => {
   return ''
 }
 
-// 所有规则的 hint 在整段文本里只扫一遍；只看资源的规则用资源文本，第一次用到时再扫
-const buildDynamicMatchContext = (snapshot, text, pageRules) => {
+// 所有规则的 hint 在整段文本里只扫一遍；只看资源的规则用资源文本，第一次用到时再扫。
+// text 开头 textResourceEnd 长的部分是逐行列出的资源 URL，之后是标题、feed 和 DOM 标记
+const buildDynamicMatchContext = (snapshot, text, pageRules, textResourceEnd = 0) => {
   const resourceUrls = [
     snapshot.url,
     ...(snapshot.resources || []),
@@ -495,11 +497,20 @@ const buildDynamicMatchContext = (snapshot, text, pageRules) => {
   const uniqueResourceUrls = [...new Set(resourceUrls.map(url => String(url || '')).filter(Boolean))]
   const resourceText = uniqueResourceUrls.join('\n').toLowerCase()
   const scanner = getDynamicHintScanner(DYNAMIC_RULE_KEYS.map(key => pageRules[key]))
+  // 脚本（含按脚本加载的 chunk、预加载脚本）和样式表是页面执行的资源；其余请求按 URL 判断
+  const attribution = createResourceAttribution(snapshot.url, [...(snapshot.scripts || []), ...(snapshot.stylesheets || [])])
   let resourceLookup = null
   return {
     text,
     lowerText: text,
+    textResourceEnd,
     resourceText,
+    ownResourceText: uniqueResourceUrls
+      .map(url => attribution.ownPart(url))
+      .filter(Boolean)
+      .join('\n')
+      .toLowerCase(),
+    attribution,
     lookup: scanner.scan(text),
     getResourceLookup: () => (resourceLookup ??= scanner.scan(resourceText)),
     frontendResourceNames: collectDynamicFrontendResourceNames(uniqueResourceUrls)
@@ -567,7 +578,8 @@ const detectDynamicCmsThemesAndSource = (add, text, extractors) => {
 
 // ----- 规则应用 -----
 
-const applyDynamicRuleList = (add, rules, context, sourceLabel, defaultCategory, evidencePrefix = () => '') => {
+// listPolicy：第三方服务类列表和自定义规则不按类别限制外站资源
+const applyDynamicRuleList = (add, rules, context, sourceLabel, defaultCategory, evidencePrefix = () => '', listPolicy = '') => {
   if (!Array.isArray(rules) || !rules.length) {
     return
   }
@@ -603,12 +615,18 @@ const applyDynamicRuleList = (add, rules, context, sourceLabel, defaultCategory,
     if (!passesHintLookup(rule, lookup) || !passesLegacyHintLookup(rule, lookup)) {
       continue
     }
-    const matchText = resourceScoped ? context.resourceText || context.lowerText || '' : context.lowerText || context.text || ''
-    const matched = matchesCompiledRulePatterns(rule, matchText)
+    const useResourceText = resourceScoped && Boolean(context.resourceText)
+    const matchText = useResourceText ? context.resourceText : context.lowerText || context.text || ''
+    const resourceEnd = useResourceText ? matchText.length : context.textResourceEnd || 0
+    const category = rule.category || defaultCategory || '其他库'
+    const policy = listPolicy || attributionPolicyOf(category)
+    const accept =
+      policy === 'service' ? undefined : (pattern, value) => hasAttributedMatch(pattern, value, context.attribution, policy, resourceEnd)
+    const matched = matchesCompiledRulePatterns(rule, matchText, accept)
     if (!matched) {
       continue
     }
-    add(rule.category || defaultCategory || '其他库', rule.name, rule.confidence || '中', `${evidencePrefix(rule)}${sourceLabel} 匹配`)
+    add(category, rule.name, rule.confidence || '中', `${evidencePrefix(rule)}${sourceLabel} 匹配`)
   }
 }
 
@@ -617,19 +635,14 @@ const applyDynamicRuleList = (add, rules, context, sourceLabel, defaultCategory,
 const detectFromDynamicSnapshot = (snapshot, pageRules) => {
   const technologies = []
   const add = createCollector(technologies, '动态监控')
-  const text = [
-    snapshot.url,
-    snapshot.title,
-    ...snapshot.resources,
-    ...snapshot.scripts,
-    ...snapshot.stylesheets,
-    ...snapshot.iframes,
-    ...snapshot.feedLinks.map(link => `${link.href} ${link.type} ${link.title}`),
-    ...snapshot.domMarkers
-  ]
+  // 资源 URL 排在前面，整行按资源判断；标题、feed 和 DOM 标记按页面源码判断
+  const resourcePart = [snapshot.url, ...snapshot.resources, ...snapshot.scripts, ...snapshot.stylesheets, ...snapshot.iframes]
     .join('\n')
     .toLowerCase()
-  const context = buildDynamicMatchContext(snapshot, text, pageRules)
+  const sourcePart = [snapshot.title, ...snapshot.feedLinks.map(link => `${link.href} ${link.type} ${link.title}`), ...snapshot.domMarkers]
+    .join('\n')
+    .toLowerCase()
+  const context = buildDynamicMatchContext(snapshot, `${resourcePart}\n${sourcePart}`, pageRules, resourcePart.length)
 
   applyDynamicRuleList(add, pageRules.dynamicTechnologies, context, 'JSON 动态技术规则')
   applyDynamicRuleList(add, pageRules.frontendFrameworks, context, 'JSON 前端框架动态规则', '前端框架')
@@ -641,7 +654,7 @@ const detectFromDynamicSnapshot = (snapshot, pageRules) => {
   applyDynamicRuleList(add, pageRules.websitePrograms, context, 'JSON 网站程序动态规则', '网站程序', rule =>
     rule.kind ? `${rule.kind}：` : ''
   )
-  detectDynamicCmsThemesAndSource(add, text, pageRules.dynamicAssetExtractors || [])
+  detectDynamicCmsThemesAndSource(add, context.ownResourceText, pageRules.dynamicAssetExtractors || [])
   applyDynamicRuleList(add, pageRules.cmsThemes, context, 'JSON 主题模板动态规则', '主题 / 模板', rule =>
     rule.kind ? `${rule.kind}：` : ''
   )
@@ -650,19 +663,20 @@ const detectFromDynamicSnapshot = (snapshot, pageRules) => {
     rule.kind ? `${rule.kind}：` : ''
   )
   applyDynamicRuleList(add, pageRules.backendHints, context, 'JSON 后端动态规则', '后端 / 服务器框架')
-  applyDynamicRuleList(add, pageRules.saasServices, context, 'JSON SaaS 动态规则', 'SaaS / 第三方服务', rule =>
-    rule.kind ? `${rule.kind}：` : ''
-  )
-  applyDynamicRuleList(add, pageRules.thirdPartyLogins, context, 'JSON 第三方登录动态规则', '第三方登录 / OAuth', rule =>
-    rule.kind ? `${rule.kind}：` : ''
-  )
-  applyDynamicRuleList(add, pageRules.paymentSystems, context, 'JSON 支付动态规则', '支付系统', rule => (rule.kind ? `${rule.kind}：` : ''))
-  applyDynamicRuleList(add, pageRules.analyticsProviders, context, 'JSON 统计动态规则', '统计 / 分析', rule =>
-    rule.kind ? `${rule.kind}：` : ''
-  )
+  const kindPrefix = rule => (rule.kind ? `${rule.kind}：` : '')
+  applyDynamicRuleList(add, pageRules.saasServices, context, 'JSON SaaS 动态规则', 'SaaS / 第三方服务', kindPrefix, 'service')
+  applyDynamicRuleList(add, pageRules.thirdPartyLogins, context, 'JSON 第三方登录动态规则', '第三方登录 / OAuth', kindPrefix, 'service')
+  applyDynamicRuleList(add, pageRules.paymentSystems, context, 'JSON 支付动态规则', '支付系统', kindPrefix, 'service')
+  applyDynamicRuleList(add, pageRules.analyticsProviders, context, 'JSON 统计动态规则', '统计 / 分析', kindPrefix, 'service')
   applyDynamicRuleList(add, pageRules.feeds, context, 'JSON Feed 动态规则', 'RSS / 订阅')
-  applyDynamicRuleList(add, filterCustomRulesForTarget(pageRules.customRules, 'dynamic'), context, '自定义动态规则', '其他库', rule =>
-    rule.kind ? `${rule.kind}：` : ''
+  applyDynamicRuleList(
+    add,
+    filterCustomRulesForTarget(pageRules.customRules, 'dynamic'),
+    context,
+    '自定义动态规则',
+    '其他库',
+    kindPrefix,
+    'service'
   )
 
   for (const link of snapshot.feedLinks) {

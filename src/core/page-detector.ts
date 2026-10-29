@@ -1,6 +1,7 @@
 // @ts-nocheck
 /* eslint-disable */
 import { createHintScanner, extractRuleHints } from '@/utils/rule-hints'
+import { attributionPolicyOf, createResourceAttribution, hasAttributedMatch, isPackageCdnHost } from '@/utils/resource-attribution'
 
 const yieldToMainThread = () =>
   typeof globalThis.scheduler?.yield === 'function' ? globalThis.scheduler.yield() : new Promise(resolve => setTimeout(resolve, 0))
@@ -128,7 +129,7 @@ export const detectPageTechnologies = async (ruleConfig: Record<string, unknown>
       stylesheets: resources.stylesheets.slice(0, 120),
       resourceTiming: resources.resourceTiming.slice(0, 220),
       all: resources.all.slice(0, 300),
-      themeAssetUrls: resources.all.filter(url => /\/wp-content\/themes\//i.test(url)).slice(0, 80),
+      themeAssetUrls: resources.own.filter(url => /\/wp-content\/themes\//i.test(url)).slice(0, 80),
       resourceDomains: summarizeDomains(resources.all),
       cssVariableCount: cssVariables.names.length,
       metaGenerator: getMetaContent('generator'),
@@ -137,20 +138,48 @@ export const detectPageTechnologies = async (ruleConfig: Record<string, unknown>
   }
 
   function collectResources() {
-    const scripts = [...document.scripts].map(script => script.src).filter(isInspectableResourceUrl)
+    // WP Rocket、LiteSpeed、WP Meteor 等延迟执行的脚本：用户交互前没有 src，地址在 data-* 属性里，同样算页面的脚本。
+    // 只收带 / 的值：Perfmatters 给内联脚本写 data-rocketlazyloadscript="1"
+    const delayedAttributes = ['data-rocket-src', 'data-src', 'data-lazy-src', 'data-wpmeteor-src', 'data-rocketlazyloadscript']
+    const delayedScripts = [...document.querySelectorAll(delayedAttributes.map(name => `script[${name}]`).join(', '))]
+      .map(script => delayedAttributes.map(name => script.getAttribute(name)).find(isDelayedScriptUrl))
+      .filter(Boolean)
+      .map(resolveResourceUrl)
+      .filter(Boolean)
+    const scripts = unique([...[...document.scripts].map(script => script.src).filter(isInspectableResourceUrl), ...delayedScripts])
     const stylesheets = [...document.querySelectorAll("link[rel~='stylesheet'], link[as='style']")]
       .map(link => link.href)
       .filter(isInspectableResourceUrl)
-    const resourceTiming = performance
-      .getEntriesByType('resource')
-      .map(entry => entry.name)
+    // 预加载的脚本随后由页面执行（SSR 页面常先输出 preload，水合后才插入 <script>）
+    const preloadedScripts = [...document.querySelectorAll("link[rel~='modulepreload'], link[rel~='preload'][as='script']")]
+      .map(link => link.href)
       .filter(isInspectableResourceUrl)
+    const timingEntries = performance.getEntriesByType('resource').filter(entry => isInspectableResourceUrl(entry.name))
+    const resourceTiming = timingEntries.map(entry => entry.name)
     const images = [...document.images]
       .map(image => image.currentSrc || image.src)
       .filter(isInspectableResourceUrl)
       .slice(0, 200)
-    const all = unique([...scripts, ...stylesheets, ...resourceTiming, ...images])
-    return { scripts, stylesheets, resourceTiming, images, all, text: all.join('\n').toLowerCase() }
+    const all = unique([...scripts, ...stylesheets, ...resourceTiming, ...images, ...preloadedScripts])
+    // 脚本、样式表和按脚本加载的 chunk 是页面执行的资源；其余跨站资源只是被页面引用
+    const executedTiming = timingEntries.filter(entry => entry.initiatorType === 'script').map(entry => entry.name)
+    // 预加载的首屏图片：同一主机上预加载了两张以上不同图片的，算页面自己选的图床或平台 CDN（无头电商的商品图在平台主机上）。
+    // 只预加载一张的不算：WP Rocket、LiteSpeed 会自动给首屏大图加 preload，转载页、友链页上那张常是外站图。
+    // 分享图和图标也不算：转载页、Hexo 会把正文里别人的图片写进 og:image
+    const preloadedImages = [...document.querySelectorAll("link[rel~='preload'][as='image']")].map(link =>
+      [link.getAttribute('href'), ...srcsetUrls(link.getAttribute('imagesrcset'))]
+        .filter(isInspectableResourceUrl)
+        .map(resolveResourceUrl)
+        .filter(Boolean)
+    )
+    const declaredImages = declaredImageUrls(preloadedImages)
+    const attribution = createResourceAttribution(
+      location.href,
+      [...scripts, ...stylesheets, ...preloadedScripts, ...executedTiming],
+      declaredImages
+    )
+    const own = all.map(url => attribution.ownPart(url)).filter(Boolean)
+    return { scripts, stylesheets, resourceTiming, images, all, own, attribution, text: all.join('\n').toLowerCase() }
   }
 
   function collectClassTokens() {
@@ -219,6 +248,58 @@ export const detectPageTechnologies = async (ruleConfig: Record<string, unknown>
   function isInspectableResourceUrl(value) {
     const url = String(value || '').trim()
     return Boolean(url) && !/^(?:data|blob|javascript|about):/i.test(url)
+  }
+
+  function resolveResourceUrl(value) {
+    try {
+      return new URL(String(value).trim(), location.href).href
+    } catch {
+      return ''
+    }
+  }
+
+  function isDelayedScriptUrl(value) {
+    return isInspectableResourceUrl(value) && String(value).includes('/')
+  }
+
+  // 每条 preload 是一张图。同一张图常有多条：Next.js Pages Router 在 React 19 下会再自动输出一条，同一张图也可能在两处设 priority。
+  // 候选地址按主机加路径比较（查询串里的宽度不算），和同主机已有的图有重叠就算同一张
+  function declaredImageUrls(preloads) {
+    const seenByHost = new Map()
+    const countByHost = new Map()
+    for (const urls of preloads) {
+      const pathsByHost = new Map()
+      for (const url of urls) {
+        try {
+          const parsed = new URL(url)
+          pathsByHost.set(parsed.hostname, [...(pathsByHost.get(parsed.hostname) || []), parsed.pathname])
+        } catch {
+          continue
+        }
+      }
+      for (const [host, paths] of pathsByHost) {
+        const seen = seenByHost.get(host) || new Set()
+        if (!paths.some(path => seen.has(path))) countByHost.set(host, (countByHost.get(host) || 0) + 1)
+        seenByHost.set(host, new Set([...seen, ...paths]))
+      }
+    }
+    return preloads.flat().filter(url => countByHost.get(hostnameOf(url)) >= 2)
+  }
+
+  function hostnameOf(url) {
+    try {
+      return new URL(url).hostname
+    } catch {
+      return ''
+    }
+  }
+
+  // srcset / imagesrcset：候选之间是逗号加空白，每个候选取空白前的地址
+  function srcsetUrls(value) {
+    return String(value || '')
+      .split(/,\s+/)
+      .map(candidate => candidate.trim().split(/\s+/)[0])
+      .filter(Boolean)
   }
 
   function stripInlineDataUrls(value) {
@@ -587,7 +668,7 @@ export const detectPageTechnologies = async (ruleConfig: Record<string, unknown>
       sourceLabel: 'JSON CDN 规则'
     })
 
-    const privateCdnMatches = collectPrivateCdnMatches(resources.all)
+    const privateCdnMatches = collectPrivateCdnMatches(resources.own)
     if (privateCdnMatches.length) {
       add(
         'CDN / 托管',
@@ -608,7 +689,8 @@ export const detectPageTechnologies = async (ruleConfig: Record<string, unknown>
         if (normalizedHost === pageHost) {
           continue
         }
-        if (isKnownThirdPartyServiceHost(normalizedHost)) {
+        // 公共包 CDN（cdn.jsdelivr.net 之类）不是私有 CDN
+        if (isKnownThirdPartyServiceHost(normalizedHost) || isPackageCdnHost(host)) {
           continue
         }
         if (
@@ -717,8 +799,8 @@ export const detectPageTechnologies = async (ruleConfig: Record<string, unknown>
   }
 
   async function detectCmsThemesAndSource(add, resources, classes, html, globalKeys, externalRules, assetExtractors = []) {
-    const assetText = `${location.href}
-${resources.all.join('\n')}`
+    const assetText = `${resources.attribution.ownPart(location.href)}
+${resources.own.join('\n')}`
     const text = `${assetText}
 ${html}`
     const normalizedText = text.toLowerCase()
@@ -838,6 +920,7 @@ ${html}`
       text,
       hintParts: ['href', 'resources', 'html'],
       sourceLabel: 'JSON SaaS 规则',
+      attributionPolicy: 'service',
       evidencePrefix: rule => (rule.kind ? rule.kind + '：' : '')
     })
   }
@@ -879,6 +962,7 @@ ${html}`
       text: `${resources.text}\n${html}${titleText}${bodyText}`,
       hintParts: ['href', 'resources', 'html', 'title', 'body'],
       sourceLabel: 'JSON 第三方登录规则',
+      attributionPolicy: 'service',
       evidencePrefix: rule => (rule.kind ? `${rule.kind}：` : '')
     })
   }
@@ -892,6 +976,7 @@ ${html}`
       text: `${location.href}\n${resources.text}\n${html}${bodyText}`,
       hintParts: ['href', 'resources', 'html', 'body'],
       sourceLabel: 'JSON 支付规则',
+      attributionPolicy: 'service',
       evidencePrefix: rule => (rule.kind ? `${rule.kind}：` : '')
     })
   }
@@ -906,6 +991,7 @@ ${html}`
       text,
       hintParts: ['href', 'title', 'resources', 'html', 'body', 'globals'],
       sourceLabel: '自定义页面规则',
+      attributionPolicy: 'service',
       evidencePrefix: rule => (rule.kind ? `${rule.kind}：` : '')
     })
   }
@@ -1155,6 +1241,8 @@ ${html}`
     const includePageUrl = Array.isArray(rule.matchIn) && rule.matchIn.includes('url')
     const allResources = getContextResources(context, includePageUrl)
     const htmlText = context.text || ''
+    // 外站被动资源和源码里的外站链接能否作为证据，按规则类别定（见 utils/resource-attribution）；第三方服务类列表和自定义规则不限制
+    const policy = context.attributionPolicy || attributionPolicyOf(rule.category || context.defaultCategory || '其他库')
     const formatUrlEvidence = resource =>
       resource === location.href ? `页面 URL 匹配 ${shortUrl(resource)}` : `资源 URL 匹配 ${shortUrl(resource)}`
 
@@ -1168,7 +1256,7 @@ ${html}`
       for (const pattern of patterns) {
         for (const url of allResources) {
           pattern.lastIndex = 0
-          if (pattern.test(url)) {
+          if (pattern.test(url) && acceptsResourceMatch(pattern, url, policy)) {
             hits.push(url)
             break
           }
@@ -1185,7 +1273,7 @@ ${html}`
     const combined = getCompiledCombinedPattern(rule)
     if (combined) {
       if (matchResource) {
-        const resource = findMatchingResource(combined, allResources, context, includePageUrl)
+        const resource = findMatchingResource(combined, allResources, context, includePageUrl, policy)
         if (resource) {
           return {
             confidence: rule.confidence || context.resourceConfidence || '高',
@@ -1196,7 +1284,7 @@ ${html}`
       }
       if (matchHtml) {
         combined.lastIndex = 0
-        if (combined.test(htmlText)) {
+        if (combined.test(htmlText) && hasAttributedMatch(combined, htmlText, resources.attribution, policy, resourceTextEndOf(context))) {
           return { confidence: rule.confidence || '中', evidence: '页面源码或资源索引包含规则特征' }
         }
       }
@@ -1206,7 +1294,7 @@ ${html}`
     const patterns = getCompiledRulePatterns(rule)
     for (const pattern of patterns) {
       if (matchResource) {
-        const resource = findMatchingResource(pattern, allResources, context, includePageUrl)
+        const resource = findMatchingResource(pattern, allResources, context, includePageUrl, policy)
         if (resource) {
           return {
             confidence: rule.confidence || context.resourceConfidence || '高',
@@ -1217,13 +1305,28 @@ ${html}`
       }
       if (matchHtml) {
         pattern.lastIndex = 0
-        if (pattern.test(htmlText)) {
+        if (pattern.test(htmlText) && hasAttributedMatch(pattern, htmlText, resources.attribution, policy, resourceTextEndOf(context))) {
           return { confidence: rule.confidence || '中', evidence: '页面源码或资源索引包含规则特征' }
         }
       }
     }
 
     return null
+  }
+
+  // 命中落在哪个 URL 上就按哪个 URL 判断：页面执行的资源整条都算，本站代理里嵌着的外站地址不算
+  function acceptsResourceMatch(pattern, url, policy) {
+    return hasAttributedMatch(pattern, url, resources.attribution, policy, url.length)
+  }
+
+  // 规则文本开头逐行列出的资源 URL（有的前面还有页面地址）整行按资源判断，之后是页面源码
+  function resourceTextEndOf(context) {
+    if (context._resourceTextEnd === undefined) {
+      const text = context.text || ''
+      const withPage = `${location.href}\n${resources.text}`
+      context._resourceTextEnd = text.startsWith(withPage) ? withPage.length : text.startsWith(resources.text) ? resources.text.length : 0
+    }
+    return context._resourceTextEnd
   }
 
   function getContextResources(context, includePageUrl) {
@@ -1246,7 +1349,7 @@ ${html}`
     return probe
   }
 
-  function findMatchingResource(pattern, resources, context, includePageUrl) {
+  function findMatchingResource(pattern, resources, context, includePageUrl, policy) {
     if (!resources.length) return undefined
     const probe = getLineProbe(pattern)
     if (probe) {
@@ -1256,7 +1359,7 @@ ${html}`
     }
     return resources.find(url => {
       pattern.lastIndex = 0
-      return pattern.test(url)
+      return pattern.test(url) && acceptsResourceMatch(pattern, url, policy)
     })
   }
 
@@ -1462,6 +1565,7 @@ ${html}`
       text,
       hintParts: ['href', 'resources', 'html'],
       sourceLabel: 'JSON 统计规则',
+      attributionPolicy: 'service',
       evidencePrefix: rule => (rule.kind ? rule.kind + '：' : '')
     })
   }

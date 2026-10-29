@@ -87,12 +87,28 @@ test('页面探针按 page-detector 的资源收集方式返回资源 URL', asyn
   globalThis.document = {
     scripts: [{ src: 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js' }, { src: '' }],
     images: [{ currentSrc: 'data:image/png;base64,AAAA' }],
-    querySelectorAll: () => [{ href: 'https://example.com/wp-content/themes/a/Style.css' }]
+    querySelectorAll: selector => {
+      if (selector.includes('stylesheet')) return [{ href: 'https://example.com/wp-content/themes/a/Style.css' }]
+      if (selector.includes('modulepreload')) return [{ href: 'https://example.com/_next/static/chunks/main.js' }]
+      // LiteSpeed 延迟执行的脚本：地址在 data-src 里；Perfmatters 的内联脚本只有 data-rocketlazyloadscript="1"
+      if (selector.includes('data-src')) {
+        return [
+          { getAttribute: name => (name === 'data-src' ? '/wp-content/plugins/b/front.js' : null) },
+          { getAttribute: name => (name === 'data-rocketlazyloadscript' ? '1' : null) }
+        ]
+      }
+      return []
+    }
   }
   globalThis.location = { href: 'https://example.com/' }
   try {
     assert.deepEqual(probePageResources(), {
-      text: 'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js\nhttps://example.com/wp-content/themes/a/style.css',
+      text: [
+        'https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js',
+        'https://example.com/wp-content/plugins/b/front.js',
+        'https://example.com/wp-content/themes/a/style.css',
+        'https://example.com/_next/static/chunks/main.js'
+      ].join('\n'),
       href: 'https://example.com/'
     })
     globalThis.document = { scripts: [], images: [], querySelectorAll: () => [] }

@@ -42,7 +42,7 @@ const pageCases = [
   ['Chevereto', { globals: ['CHEVERETO'] }],
   ['EasyImage', { resources: ['https://img.example.com/public/static/EasyImage.js'] }],
   ['Medium', { resources: ['https://cdn-client.medium.com/lite/static/manifest-3df6b82e.js'] }],
-  ['Hashnode', { resources: ['https://cdn.hashnode.com/res/hashnode/image/upload/v1/abc.png'] }],
+  ['Hashnode', { scripts: ['https://ping.hashnode.com/gtag/js?id=G-72XG3F8LNJ'] }],
   ['Hashnode', { href: 'https://someone.hashnode.dev/post-1' }],
   ['Tistory', { resources: ['https://tistory1.daumcdn.net/tistory_admin/userblog/userblog-837e/static/pc/dist/index.js'] }],
   ['Tistory', { globals: ['TistoryBlog'] }],
@@ -169,6 +169,13 @@ test('正文里提到程序名、通用路径和常见全局变量时不误判',
     tech => tech.name
   )
   assert.deepEqual(wrong, [])
+})
+
+test('WordPress 插件目录不当成 October CMS 插件目录', async () => {
+  const has = async (url, name) =>
+    (await runPageDetector(pageRules, { href: 'https://www.example.com/', resources: [url] })).some(tech => tech.name === name)
+  assert.equal(await has('https://www.example.com/wp-content/plugins/genesis-blocks/dist/assets/js/dismiss.js', 'October CMS'), false)
+  assert.ok(await has('https://www.example.com/plugins/rainlab/blog/assets/js/post-form.js', 'October CMS'))
 })
 
 const headerCases = [

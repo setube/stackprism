@@ -71,9 +71,10 @@ export const loadHeaderRules = () => {
   return merged
 }
 
-export const loadHeadersModule = async () => {
+// 打包 src 下的 TS 模块（解析 @/ 别名）后导入
+export const loadTsModule = async file => {
   const result = await build({
-    entryPoints: [path.join(repoRoot, 'src/background/headers.ts')],
+    entryPoints: [path.join(repoRoot, file)],
     bundle: true,
     write: false,
     format: 'esm',
@@ -83,6 +84,8 @@ export const loadHeadersModule = async () => {
   })
   return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text, 'utf8').toString('base64')}`)
 }
+
+export const loadHeadersModule = () => loadTsModule('src/background/headers.ts')
 
 export const detectHeaders = (headersModule, headerRules, headers, url = 'https://example.com/') =>
   headersModule.buildHeaderRecord(
@@ -129,26 +132,52 @@ const loadDetectorSource = async () => {
   return detectorSource
 }
 
-// 在 vm 里跑真实的 page-detector：fixture 提供页面地址、HTML、资源 URL、全局变量名、类名和能命中的选择器
-export const runPageDetector = async (pageRules, fixture) => {
+// 只带属性的元素：preload 图片、延迟执行的脚本
+const attributeNode = attributes => ({ getAttribute: name => attributes[name] ?? null })
+
+// 在 vm 里跑真实的 page-detector：fixture 提供页面地址、HTML、资源 URL、全局变量名、类名和能命中的选择器；
+// scripts 是没有 .js 后缀的脚本地址，stylesheets 是没有 .css 后缀的样式表，preloads 是 preload / modulepreload 的脚本，
+// images 是已加载的图片（同时进 document.images 和 initiatorType=img 的计时条目），entries 是带 initiatorType 的其他计时条目，
+// preloadImages 是 preload 的图片（地址字符串，或 { href, imagesrcset }），delayedScripts 是延迟执行的脚本（{ 'data-rocket-src': 地址 } 这样的属性表）
+export const runPageDetectorResult = async (pageRules, fixture) => {
   const {
     href = 'https://example.com/',
     html = '<html><head></head><body></body></html>',
     resources = [],
+    scripts = [],
+    stylesheets = [],
+    preloads = [],
+    preloadImages = [],
+    delayedScripts = [],
+    images = [],
+    entries = [],
     globals = [],
     classes = []
   } = fixture
   const selectors = new Set(fixture.selectors || [])
   const classNodes = classes.map(token => ({ classList: [token], className: token }))
+  const timingEntries = [
+    ...resources.map(name => ({ name })),
+    ...scripts.map(name => ({ name, initiatorType: 'script' })),
+    ...[...stylesheets, ...preloads].map(name => ({ name, initiatorType: 'link' })),
+    ...images.map(name => ({ name, initiatorType: 'img' })),
+    ...entries
+  ].map(entry => ({ nextHopProtocol: '', ...entry }))
   const document = {
-    scripts: resources.filter(url => /\.js(?:[?#]|$)/i.test(url)).map(src => ({ src })),
-    images: [],
+    scripts: [...resources.filter(url => /\.js(?:[?#]|$)/i.test(url)), ...scripts].map(src => ({ src })),
+    images: images.map(src => ({ src, currentSrc: src })),
     title: fixture.title || '',
     documentElement: { outerHTML: html },
     body: { innerText: html.replace(/<[^>]+>/g, ' ') },
     styleSheets: [],
     querySelectorAll: selector => {
-      if (selector.includes('stylesheet')) return resources.filter(url => /\.css(?:[?#]|$)/i.test(url)).map(url => ({ href: url }))
+      if (selector.includes('stylesheet')) {
+        return [...resources.filter(url => /\.css(?:[?#]|$)/i.test(url)), ...stylesheets].map(url => ({ href: url }))
+      }
+      if (selector.includes('modulepreload')) return preloads.map(url => ({ href: url }))
+      if (selector.includes("[as='image']"))
+        return preloadImages.map(item => attributeNode(typeof item === 'string' ? { href: item } : item))
+      if (selector.includes('data-rocket-src')) return delayedScripts.map(attributeNode)
       if (selector === '[class]') return classNodes
       return []
     },
@@ -164,7 +193,7 @@ export const runPageDetector = async (pageRules, fixture) => {
     navigator: {},
     performance: {
       now: () => performance.now(),
-      getEntriesByType: () => resources.map(name => ({ name, nextHopProtocol: '' })),
+      getEntriesByType: () => timingEntries,
       mark() {},
       measure() {}
     },
@@ -181,9 +210,10 @@ export const runPageDetector = async (pageRules, fixture) => {
   context.globalThis = context
   vm.createContext(context)
   vm.runInContext(await loadDetectorSource(), context)
-  const result = await context.__spDone
-  return result.technologies
+  return context.__spDone
 }
+
+export const runPageDetector = async (pageRules, fixture) => (await runPageDetectorResult(pageRules, fixture)).technologies
 
 // 编译 dynamic-snapshot.ts 里的纯匹配函数；标签页存储、计时器等扩展 IO 依赖不打包
 let dynamicDetector = null

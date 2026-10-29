@@ -1,5 +1,6 @@
 import { mergeTechnologyRecords, cleanWordPressThemeSlug, shortHeaderUrl } from './merge'
 import { cleanTechnologyUrl, normalizeHttpUrl } from '@/utils/url'
+import { createResourceAttribution } from '@/utils/resource-attribution'
 
 const themeStyleFetchCache = new Map<string, { expiresAt: number; value: string }>()
 
@@ -165,18 +166,30 @@ const extractWordPressThemeStyleRequest = (rawUrl: string, baseUrl: string) => {
 
 const collectWordPressThemeStyleRequests = (page: any) => {
   const baseUrl = String(page?.url || '')
+  const resources = page?.resources || {}
+  const executedUrls = [resources.scripts, resources.stylesheets, page?.scripts, page?.stylesheets]
+    .flatMap(values => (Array.isArray(values) ? values : []))
+    .filter((value): value is string => typeof value === 'string')
+  // 外站被动资源（友链头像之类）路径里的主题目录属于那个外站，不去拉它的 style.css
+  const attribution = createResourceAttribution(baseUrl, executedUrls)
   const rawUrls: string[] = []
   const addUrl = (value: unknown) => {
-    if (typeof value === 'string' && value.trim()) {
-      rawUrls.push(value)
+    const own = typeof value === 'string' && value.trim() ? attribution.ownPart(value) : ''
+    if (own) {
+      rawUrls.push(own)
     }
   }
   const addList = (values: unknown) => {
     if (Array.isArray(values)) values.forEach(addUrl)
   }
+  const addTrustedList = (values: unknown) => {
+    if (!Array.isArray(values)) return
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim()) rawUrls.push(value)
+    }
+  }
 
   addUrl(baseUrl)
-  const resources = page?.resources || {}
   for (const key of [
     'scripts',
     'stylesheets',
@@ -188,7 +201,9 @@ const collectWordPressThemeStyleRequests = (page: any) => {
     'resources',
     'iframes'
   ]) {
-    addList(resources[key])
+    // themeAssetUrls 是页面检测已按归属筛过的本站资源（含按预加载、脚本 chunk 认定的可信主机），不再筛一遍
+    if (key === 'themeAssetUrls') addTrustedList(resources[key])
+    else addList(resources[key])
   }
   for (const key of ['scripts', 'stylesheets', 'resources', 'iframes']) {
     addList(page?.[key])

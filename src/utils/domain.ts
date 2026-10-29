@@ -50,22 +50,77 @@ const MULTI_LABEL_SUFFIXES = new Set(
     .filter(Boolean)
 )
 
+// 建站托管平台（公共后缀表的私有段）：每个子域都是别人的独立站点，可注册域取后缀再加一段。
+// 只收平台根域本身不承载站点资源的后缀，避免把平台自己的页面和资源子域拆开
+const HOSTING_TENANT_SUFFIXES = new Set(
+  `github.io gitlab.io gitee.io codeberg.page pages.dev workers.dev vercel.app now.sh netlify.app
+   web.app firebaseapp.com appspot.com surge.sh onrender.com herokuapp.com fly.dev deno.dev glitch.me
+   repl.co replit.app readthedocs.io gitbook.io azurewebsites.net azurestaticapps.net blogspot.com
+   hashnode.dev 4everland.app zeabur.app up.railway.app ondigitalocean.app edgeone.app myshopify.com wixsite.com
+   webflow.io framer.app framer.website framer.ai notion.site carrd.co`
+    .split(/\s+/)
+    .filter(Boolean)
+)
+// 按区域分段的托管后缀：名称.4.azurestaticapps.net、名称.eastus-01.azurewebsites.net
+const REGIONAL_TENANT_SUFFIX =
+  /^(?:(?:\d+|centralus|eastasia|eastus2|westeurope|westus2)\.azurestaticapps\.net|[a-z0-9]+-\d{2}\.azurewebsites\.net)$/
+
+// 免费二级域名服务（同属公共后缀表的私有段）：每个子域都归不同的人
+const FREE_SUBDOMAIN_SUFFIXES = new Set(
+  `eu.org us.kg xx.kg dpdns.org qzz.io pp.ua js.org is-a.dev cloudns.asia cloudns.be cloudns.biz cloudns.cc
+   cloudns.ch cloudns.cl cloudns.club cloudns.cx cloudns.eu cloudns.in cloudns.info cloudns.nz cloudns.org
+   cloudns.ph cloudns.pro cloudns.pw cloudns.us`
+    .split(/\s+/)
+    .filter(Boolean)
+)
+// eu.org 的国家 / 机构子区（名称.cn.eu.org）
+const EU_ORG_ZONES = new Set(
+  `al asso at au be bg ca cd ch cn cy cz de dk edu ee es fi fr gr hr hu ie il in int is it jp kr lt lu lv
+   me mk mt my net ng nl no nz pl pt ro ru se si sk tr uk us`
+    .split(/\s+/)
+    .filter(Boolean)
+)
+
+const isTenantSuffix = (suffix: string): boolean => HOSTING_TENANT_SUFFIXES.has(suffix) || REGIONAL_TENANT_SUFFIX.test(suffix)
+
+const isKnownSuffix = (suffix: string): boolean =>
+  MULTI_LABEL_SUFFIXES.has(suffix) ||
+  FREE_SUBDOMAIN_SUFFIXES.has(suffix) ||
+  isTenantSuffix(suffix) ||
+  (suffix.endsWith('.eu.org') && EU_ORG_ZONES.has(suffix.slice(0, -'.eu.org'.length)))
+
+// 已知多段后缀最长 3 段（us.eu.org、up.railway.app）：只看末尾几段，构造的超长主机也不会按段数平方增长
+const MAX_SUFFIX_LABELS = 3
+
+// 主机名里最长的已知多段后缀从第几段开始，没有时返回 -1
+const findSuffixStart = (labels: string[], isSuffix: (suffix: string) => boolean): number => {
+  for (let start = Math.max(1, labels.length - MAX_SUFFIX_LABELS); start < labels.length - 1; start += 1) {
+    if (isSuffix(labels.slice(start).join('.'))) return start
+  }
+  return -1
+}
+
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/
 
 const isIpHost = (host: string): boolean => IPV4_RE.test(host) || host.includes(':')
 
-// 把主机名归并到可注册域（eTLD+1）。IP / 单段主机名原样返回。
-export const getRegistrableDomain = (hostname: unknown): string => {
-  const host = String(hostname ?? '')
+const normalizeHost = (hostname: unknown): string =>
+  String(hostname ?? '')
     .toLowerCase()
     .replace(/\.$/, '')
+
+// 把主机名归并到可注册域（eTLD+1）。IP / 单段主机名原样返回。
+export const getRegistrableDomain = (hostname: unknown): string => {
+  const host = normalizeHost(hostname)
   if (!host || isIpHost(host)) return host
   const labels = host.split('.')
   if (labels.length <= 2) return host
-  const last2 = labels.slice(-2).join('.')
-  if (MULTI_LABEL_SUFFIXES.has(last2)) return labels.slice(-3).join('.')
-  return last2
+  const start = findSuffixStart(labels, isKnownSuffix)
+  return labels.slice(start > 0 ? start - 1 : -2).join('.')
 }
+
+// 托管平台上的租户站点（friend.github.io 之类）：主机名本身就代表那个站点
+export const isHostingTenantHost = (hostname: unknown): boolean => findSuffixStart(normalizeHost(hostname).split('.'), isTenantSuffix) > 0
 
 const registrableDomainFromUrl = (rawUrl: unknown): string => {
   try {

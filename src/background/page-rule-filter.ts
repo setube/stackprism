@@ -58,6 +58,24 @@ export const probePageResources = (): PageResourceProbe | null => {
     return Boolean(url) && !/^(?:data|blob|javascript|about):/i.test(url)
   }
   const scripts = [...document.scripts].map(script => script.src).filter(inspectable)
+  // 预加载的脚本和延迟执行的脚本（地址在 data-* 属性里，只收带 / 的值）也是页面的脚本
+  const preloadedScripts = [...document.querySelectorAll<HTMLLinkElement>("link[rel~='modulepreload'], link[rel~='preload'][as='script']")]
+    .map(link => link.href)
+    .filter(inspectable)
+  const delayedAttributes = ['data-rocket-src', 'data-src', 'data-lazy-src', 'data-wpmeteor-src', 'data-rocketlazyloadscript']
+  const delayedScripts = [...document.querySelectorAll(delayedAttributes.map(name => `script[${name}]`).join(', '))]
+    .map(script =>
+      delayedAttributes.map(name => script.getAttribute(name)).find(value => inspectable(value) && String(value).includes('/'))
+    )
+    .filter(Boolean)
+    .map(value => {
+      try {
+        return new URL(String(value).trim(), location.href).href
+      } catch {
+        return ''
+      }
+    })
+    .filter(Boolean)
   const stylesheets = [...document.querySelectorAll<HTMLLinkElement>("link[rel~='stylesheet'], link[as='style']")]
     .map(link => link.href)
     .filter(inspectable)
@@ -69,7 +87,9 @@ export const probePageResources = (): PageResourceProbe | null => {
     .map(image => image.currentSrc || image.src)
     .filter(inspectable)
     .slice(0, 200)
-  const text = [...new Set([...scripts, ...stylesheets, ...resourceTiming, ...images])].join('\n').toLowerCase()
+  const text = [...new Set([...scripts, ...delayedScripts, ...stylesheets, ...resourceTiming, ...images, ...preloadedScripts])]
+    .join('\n')
+    .toLowerCase()
   return text ? { text, href: location.href } : null
 }
 

@@ -14,7 +14,7 @@
   const CONTEXT_INVALIDATED_PATTERN = /extension context invalidated|context invalidated/i
   const OBSERVER_INSTANCE_KEY = '__stackPrismContentObserver__'
   const SKIP_TAGS = new Set(['VIDEO', 'AUDIO', 'CANVAS', 'PICTURE', 'SOURCE', 'TRACK', 'SVG', 'IMG'])
-  const SKIP_INITIATOR_TYPES = new Set(['img', 'video', 'audio', 'beacon', 'track', 'object', 'embed', 'css'])
+  const SKIP_INITIATOR_TYPES = new Set(['img', 'image', 'video', 'audio', 'beacon', 'track', 'object', 'embed', 'css'])
   const SKIP_RESOURCE_EXT = /\.(ts|m4s|mp4|webm|mov|m3u8|mpd|jpg|jpeg|png|gif|webp|avif|ico|woff2?|ttf|otf|eot)(\?.*)?$/i
   const SKIP_CONTAINER_PATTERN =
     /danmaku|bullet[\s_-]*(?:comment|screen|chat)|barrage|(?:^|[\s._#-])chat(?:[\s._#-]|$)|chat-?(?:panel|area|list|box|room|stream|window)|live-?chat|comment-?(?:stream|live|list)|(?:^|[\s._-])feed(?:[\s._-]|$)|webcast/i
@@ -179,10 +179,17 @@
 
   // ----- 静态快照采集 -----
 
+  // 预加载的脚本随后由页面执行，和 <script> 一样算页面的脚本
+  const SCRIPT_PRELOAD_SELECTOR = "link[rel~='modulepreload'], link[rel~='preload'][as='script']"
+
   const collectScripts = root => {
     for (const script of root.scripts || []) {
       addUrl('scripts', script.src)
       addUrl('resources', script.src)
+    }
+    for (const link of root.querySelectorAll?.(SCRIPT_PRELOAD_SELECTOR) || []) {
+      addUrl('scripts', link.href)
+      addUrl('resources', link.href)
     }
   }
 
@@ -219,10 +226,20 @@
     }
   }
 
+  // 图片、媒体、字体、信标这类条目只是页面引用的内容，不进快照；静态采集和 PerformanceObserver 用同一个判定
+  const isSkippedResourceEntry = entry => SKIP_INITIATOR_TYPES.has(entry.initiatorType) || SKIP_RESOURCE_EXT.test(entry.name)
+
+  // 按脚本加载的 chunk（import()、动态插入后又移除的 <script>）同样记成页面脚本
+  const addResourceEntry = entry => {
+    if (entry.initiatorType === 'script') addUrl('scripts', entry.name)
+    return addUrl('resources', entry.name)
+  }
+
   const collectPerformanceResources = () => {
     try {
       for (const entry of performance.getEntriesByType('resource')) {
-        addUrl('resources', entry.name)
+        if (isSkippedResourceEntry(entry)) continue
+        addResourceEntry(entry)
       }
     } catch {
       return
@@ -278,6 +295,10 @@
       const type = String(element.type || '').toLowerCase()
       if (rel.includes('stylesheet') || element.as === 'style') {
         changed = addUrl('stylesheets', href) || changed
+        changed = addUrl('resources', href) || changed
+      }
+      if (element.matches?.(SCRIPT_PRELOAD_SELECTOR)) {
+        changed = addUrl('scripts', href) || changed
         changed = addUrl('resources', href) || changed
       }
       if (rel.includes('alternate') && /rss|atom|feed|json/.test(`${type} ${href}`.toLowerCase())) {
@@ -501,9 +522,8 @@
         let added = 0
         const entries = list.getEntries()
         for (const entry of entries) {
-          if (SKIP_INITIATOR_TYPES.has(entry.initiatorType)) continue
-          if (SKIP_RESOURCE_EXT.test(entry.name)) continue
-          if (addUrl('resources', entry.name)) added += 1
+          if (isSkippedResourceEntry(entry)) continue
+          if (addResourceEntry(entry)) added += 1
           state.resourceCount += 1
         }
         if (state.resourceCount >= MAX_RESOURCE_COUNT) {

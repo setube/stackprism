@@ -1,7 +1,7 @@
 {
   "name": "stackprism",
   "private": true,
-  "version": "1.3.92",
+  "version": "1.3.93",
   "license": "MIT",
   "type": "module",
   "description": "StackPrism 是一款 Chrome、Edge 和 Firefox 浏览器扩展，用于识别网页使用的前端框架、技术库、运行时、CMS、分析服务和安全线索。",

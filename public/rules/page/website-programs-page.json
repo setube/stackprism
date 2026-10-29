@@ -113,15 +113,9 @@
               "name": "llms.txt",
               "url": "https://llmstxt.org/",
               "matchType": "regex",
-              "patterns": [
-                "href=[\"'][^\"'>]*llms(?:-full)?\\.txt",
-                "rel=[\"']?llms-sitemap"
-              ],
-              "selectors": [
-                "link[rel='llms-sitemap']",
-                "link[rel='describedby'][href*='llms.txt']",
-                "link[rel='llms.txt']"
-              ]
+              "__hints": ["llms"],
+              "patterns": ["(?<=href=[\"'][^\"'>]{0,500})llms(?:-full)?\\.txt", "rel=[\"']?llms-sitemap"],
+              "selectors": ["link[rel='llms-sitemap']", "link[rel='describedby'][href*='llms.txt']", "link[rel='llms.txt']"]
             }
           ]
         }
