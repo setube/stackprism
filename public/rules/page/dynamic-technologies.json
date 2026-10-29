@@ -144,6 +144,11 @@
               {
                 "name": "Swiper",
                 "patterns": ["swiper(?:\\.bundle)?(?:\\.min)?\\.(?:js|css)"]
+              },
+              {
+                "name": "Formily",
+                "confidence": "高",
+                "patterns": ["\\.(?:ant|next)-formily-[a-z]", "\\.formily-(?:element|vant|semi|tdesign)-[a-z]"]
               }
             ]
           }

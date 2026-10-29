@@ -367,6 +367,18 @@
             "patterns": ["zod(?:\\/|\\.)|zod-error|ZodError"]
           },
           {
+            "name": "Formily",
+            "url": "https://formilyjs.org",
+            "confidence": "高",
+            "matchIn": ["resources"],
+            "patterns": [
+              "(?:^|/)@formily/[a-z][\\w.-]*(?:@[^/\\s\"'<>]+)?/",
+              "(?:^|/)formily\\.[a-z][\\w-]*\\.umd\\.(?:production|development)\\.js(?:[?#]|$)"
+            ],
+            "globals": ["Formily"],
+            "classPrefixes": ["ant-formily-", "next-formily-", "formily-element-", "formily-vant-", "formily-semi-", "formily-tdesign-"]
+          },
+          {
             "name": "Pinia",
             "resourceHints": ["pinia"],
             "patterns": [

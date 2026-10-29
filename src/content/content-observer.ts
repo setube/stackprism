@@ -18,6 +18,9 @@
   const SKIP_RESOURCE_EXT = /\.(ts|m4s|mp4|webm|mov|m3u8|mpd|jpg|jpeg|png|gif|webp|avif|ico|woff2?|ttf|otf|eot)(\?.*)?$/i
   const SKIP_CONTAINER_PATTERN =
     /danmaku|bullet[\s_-]*(?:comment|screen|chat)|barrage|(?:^|[\s._#-])chat(?:[\s._#-]|$)|chat-?(?:panel|area|list|box|room|stream|window)|live-?chat|comment-?(?:stream|live|list)|(?:^|[\s._-])feed(?:[\s._-]|$)|webcast/i
+  // 动态插入节点里值得上报的 UI 库类名前缀
+  const DOM_MARKER_CLASS_PATTERN =
+    /^(ant-|Mui|chakra-|el-|v-|svelte-|astro-|q-|van-|layui-|weui-|uk-|bp\d-|cds--|dx-|p-|tdesign-|arco-|next-formily-|formily-)/
   const state = {
     startedAt: Date.now(),
     updatedAt: Date.now(),
@@ -250,7 +253,7 @@
     if (className) {
       const selectedClasses = className
         .split(/\s+/)
-        .filter(token => /^(ant-|Mui|chakra-|el-|v-|svelte-|astro-|q-|van-|layui-|weui-|uk-|bp\d-|cds--|dx-|p-|tdesign-|arco-)/.test(token))
+        .filter(token => DOM_MARKER_CLASS_PATTERN.test(token))
         .slice(0, 8)
       markers.push(...selectedClasses.map(token => `.${token}`))
     }

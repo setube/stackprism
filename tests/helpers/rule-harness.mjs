@@ -184,3 +184,50 @@ export const runPageDetector = async (pageRules, fixture) => {
   const result = await context.__spDone
   return result.technologies
 }
+
+// 编译 dynamic-snapshot.ts 里的纯匹配函数；标签页存储、计时器等扩展 IO 依赖不打包
+let dynamicDetector = null
+export const loadDynamicSnapshotDetector = async () => {
+  if (dynamicDetector) return dynamicDetector
+  const source = readFileSync(path.join(repoRoot, 'src/background/dynamic-snapshot.ts'), 'utf8')
+  const compiled = await build({
+    stdin: {
+      contents: `${source.replaceAll('export const ', 'const ')}\nexport { detectFromDynamicSnapshot };`,
+      loader: 'ts',
+      resolveDir: path.join(repoRoot, 'src/background')
+    },
+    bundle: true,
+    write: false,
+    format: 'esm',
+    platform: 'node',
+    logLevel: 'silent',
+    plugins: [
+      srcAliasPlugin,
+      {
+        name: 'exclude-extension-io',
+        setup(pluginBuild) {
+          pluginBuild.onResolve({ filter: /^\.\/(tab-store|detection|detector-settings|bundle-license|tab-write-lock)$/ }, args => ({
+            path: args.path,
+            external: true,
+            sideEffects: false
+          }))
+        }
+      }
+    ]
+  })
+  const module = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`)
+  dynamicDetector = module.detectFromDynamicSnapshot
+  return dynamicDetector
+}
+
+export const createDynamicSnapshot = (overrides = {}) => ({
+  url: 'https://example.com/',
+  title: '',
+  resources: [],
+  scripts: [],
+  stylesheets: [],
+  iframes: [],
+  feedLinks: [],
+  domMarkers: [],
+  ...overrides
+})
